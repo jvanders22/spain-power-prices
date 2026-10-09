@@ -12,10 +12,10 @@ export const SolarExplainer: React.FC = () => {
 
   // Main scene (title + chart + callouts) eases out before the end card.
   // Title, Chart and Callouts are timed against absolute frames (see timeline.ts).
-  const out = interpolate(frame, [T.sceneOut, T.endIn], [0, 1], {
+  const out = interpolate(frame, [T.sceneOut, T.sceneOutEnd], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
-    easing: Easing.in(Easing.cubic),
+    easing: Easing.inOut(Easing.cubic),
   });
 
   return (
@@ -27,7 +27,7 @@ export const SolarExplainer: React.FC = () => {
       }}
     >
       {out < 1 ? (
-        <AbsoluteFill style={{opacity: 1 - out, transform: `scale(${1 - out * 0.03})`}}>
+        <AbsoluteFill style={{opacity: 1 - out, transform: `scale(${1 - out * 0.02})`}}>
           <Title />
           <Chart />
           <Callouts />

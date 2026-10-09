@@ -2,13 +2,13 @@ import React from 'react';
 import {spring, useCurrentFrame, useVideoConfig} from 'remotion';
 import data from './data.json';
 import {fmtPct} from './format';
+import {COLORS, MARGIN} from './theme';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const fmtDay = (iso: string) => {
   const [y, m, d] = iso.split('-').map(Number);
   return `${d} ${MONTHS[m - 1]} ${y}`;
 };
-import {COLORS, MARGIN} from './theme';
 
 const [Y1, Y2] = data.years;
 
@@ -44,6 +44,8 @@ export const EndCard: React.FC = () => {
   const enter = (delay: number) => spring({frame: frame - delay, fps, config: {damping: 200}, durationInFrames: 28});
 
   const head = enter(0);
+  // Accent bar grows only after the headline is legible, so it never reads as a lone orange dash.
+  const bar = enter(12);
   const footer = enter(40);
 
   return (
@@ -65,7 +67,20 @@ export const EndCard: React.FC = () => {
         <div style={{marginTop: 14, fontSize: 26, fontWeight: 500, color: COLORS.textMuted, opacity: head}}>
           {Y1.label} <span style={{color: COLORS.textFaint}}>vs</span> <span style={{color: COLORS.year2}}>{Y2.label}</span>
         </div>
-        <div style={{marginTop: 22, height: 5, width: 120 * head, background: COLORS.year2, borderRadius: 3}} />
+        {/* Accent bar: fades with the headline and grows via scaleX. Previously it was fully opaque from
+            the card's first frame with width = 120 * head, so it showed as a stray orange dash before the text appeared. */}
+        <div
+          style={{
+            marginTop: 22,
+            height: 5,
+            width: 120,
+            background: COLORS.year2,
+            borderRadius: 3,
+            opacity: bar,
+            transform: `scaleX(${bar})`,
+            transformOrigin: 'left center',
+          }}
+        />
 
         <div style={{marginTop: 56, display: 'flex', flexDirection: 'column', gap: 50}}>
           {stats.map((s, i) => {

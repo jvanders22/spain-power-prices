@@ -75,7 +75,7 @@ export const Callouts: React.FC = () => (
       to={Y2.evening_19_22}
       dir="up"
       color={COLORS.up}
-      delay={T.calloutsIn + 8}
+      delay={T.calloutsIn + T.calloutStagger}
     />
   </div>
 );

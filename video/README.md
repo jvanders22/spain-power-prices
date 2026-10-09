@@ -1,6 +1,6 @@
 # Solar explainer video (Remotion)
 
-A 20-second, 1080×1080, 30 fps animated explainer of the solar findings, built with
+A 26.5-second, 1080×1080, 30 fps animated explainer of the solar findings, built with
 [Remotion](https://www.remotion.dev/) (React → video). The year-1 hourly price curve draws in,
 morphs into year 2 (the midday "duck" deepens, the evening peak rises), then the headline
 numbers land.
@@ -24,7 +24,7 @@ cd video
 npm ci
 npx remotion browser ensure      # headless Chromium, first run only
 npm run render                    # -> out/solar-explainer.mp4 (not committed)
-npm run stills                    # start / middle / end PNGs in out/
+npm run stills                    # start / middle / callouts / transition / end PNGs in out/
 npm run studio                    # live preview
 ```
 
