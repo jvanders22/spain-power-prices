@@ -16,7 +16,7 @@ README = f"# Title\n\nintro\n\n{case_study.START}\nold\n{case_study.END}\n\n## A
 
 @pytest.fixture(scope="module")
 def frame():
-    return build_hourly(*synthetic_inputs("2024-10-01", "2025-11-30 23:00"))
+    return build_hourly(*synthetic_inputs("2024-10-01", "2026-10-09 23:00"))
 
 
 @pytest.fixture(scope="module")
@@ -35,7 +35,7 @@ def test_render_uses_findings_numbers(frame):
         assert f"\n## {section}\n" in md
     assert f"{h['hours']:,} hourly rows" in md
     assert f"correlate at\n  {h['corr_price_renewables']:.2f}" in md
-    assert "1 Oct 2024 to 30 Nov 2025" in md
+    assert "1 Oct 2024 to 9 Oct 2026" in md
     assert "nan" not in md.lower()
     assert case_study.render(frame) == md
 
@@ -43,6 +43,28 @@ def test_render_uses_findings_numbers(frame):
 def test_render_needs_two_windows(hourly):
     with pytest.raises(ValueError, match="two comparison windows"):
         case_study.render(hourly)
+
+
+def test_render_needs_complete_windows(frame):
+    # Data stops in August: the second window is not a full seasonal cycle.
+    with pytest.raises(ValueError, match=r"Oct 2025–Sep 2026 is incomplete: 37 of 365 days missing"):
+        case_study.render(frame[frame["date"] <= "2026-08-24"])
+    # A whole day missing inside the first window.
+    with pytest.raises(ValueError, match=r"Oct 2024–Sep 2025 is incomplete: 1 of 365 days missing"):
+        case_study.render(frame[frame["date"] != "2025-02-10"])
+    # Several hours of one month missing; a single missing hour is tolerated, as in findings.
+    holes = frame[(frame["date"] == "2025-07-03") & frame["hour"].between(3, 5)].index
+    with pytest.raises(ValueError, match="2025-07 is 3 hours short"):
+        case_study.render(frame.drop(holes))
+    assert findings.window_gaps(frame.drop(holes[:1]), *findings.WINDOWS["Oct 2024–Sep 2025"]) == []
+    assert "full seasonal cycle" in case_study.render(frame.drop(holes[:1]))
+
+
+def test_capture_wording(frame):
+    md = case_study.render(frame)
+    assert "generation-weighted hourly\n  capture prices (an estimate)" in md
+    assert "15-minute periods, price and" in md
+    assert "actually sell" not in md
 
 
 def test_update_readme_replaces_block_and_demotes_headings():

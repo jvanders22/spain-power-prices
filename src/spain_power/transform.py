@@ -101,10 +101,15 @@ def filter_dates(df: pd.DataFrame, start, end) -> pd.DataFrame:
     return df[(d >= pd.Timestamp(start)) & (d <= pd.Timestamp(end))]
 
 
+def share_bucket(share: pd.Series, step: float = 0.1) -> pd.Series:
+    """Renewables-share bucket of each hour: left-closed ``[k*step, (k+1)*step)`` up to 1.5."""
+    edges = np.arange(0, 1.5 + step, step)
+    return pd.cut(share, edges, right=False)
+
+
 def share_buckets(df: pd.DataFrame, step: float = 0.1) -> pd.DataFrame:
     """Average price by renewables-share bucket (e.g. 0.3-0.4)."""
-    edges = np.arange(0, 1.5 + step, step)
-    b = pd.cut(df["renewables_share"], edges, right=False)
+    b = share_bucket(df["renewables_share"], step)
     g = df.groupby(b, observed=True)["price_es"].agg(["mean", "median", "count"])
     g.index = [f"{iv.left:.0%}-{iv.right:.0%}" for iv in g.index]
     return g

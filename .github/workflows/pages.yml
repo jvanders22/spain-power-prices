@@ -1,7 +1,7 @@
 name: pages
 
 # Builds the static site (scripts/build_site.py) and deploys it to GitHub Pages.
-# Runs on pushes to main, by hand, and after a successful daily refresh. A workflow_run
+# Runs on pushes to main, by hand, and after a successful daily refresh on main. A workflow_run
 # build checks out main, so it only shows new data when the refresh commits the table
 # back (repository variable COMMIT_DATA=true).
 on:
@@ -11,6 +11,7 @@ on:
   workflow_run:
     workflows: [daily-refresh]
     types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
@@ -37,9 +38,10 @@ jobs:
 
   # Pages on the Free plan needs a public repo; Josh flips the repository variable
   # PAGES_ENABLED to 'true' after making the repo public and enabling Pages (source:
-  # GitHub Actions). Until then the site is only built, never deployed.
+  # GitHub Actions). Until then the site is only built, never deployed. Only main is ever
+  # deployed, including when the workflow is started by hand from another branch.
   deploy:
-    if: vars.PAGES_ENABLED == 'true'
+    if: vars.PAGES_ENABLED == 'true' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:

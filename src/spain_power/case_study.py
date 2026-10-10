@@ -37,12 +37,21 @@ def _moved(a: float, b: float, fmt: str) -> str:
 
 
 def render(df: pd.DataFrame) -> str:
-    """The case study as markdown. Needs data in at least two of ``findings.WINDOWS``."""
+    """The case study as markdown.
+
+    Needs two complete comparison windows (``findings.WINDOWS``) and raises ``ValueError``
+    otherwise, which also fails the site build.
+    """
     h = findings.headline(df)
     w = h["windows"]
     if w.shape[1] < 2:
         raise ValueError("case study needs data in two comparison windows (see findings.WINDOWS)")
     (n1, a), (n2, b) = list(w.items())[-2:]
+    # The text compares annual counts and calls both windows a full seasonal cycle.
+    for name in (n1, n2):
+        gaps = findings.window_gaps(df, *findings.WINDOWS[name])
+        if gaps:
+            raise ValueError(f"comparison window {name} is incomplete: " + "; ".join(gaps))
     days = df["date"].nunique()
     calibrated = int(df.groupby("date")["calibrated"].first().sum())
     event_hours = int(df["grid_event"].sum())
@@ -56,7 +65,7 @@ def render(df: pd.DataFrame) -> str:
 Spain keeps adding solar, and the day-ahead market shows it: midday prices sink while evening
 prices hold. I wanted to measure that with public data: how does the price move as renewables
 cover more of demand, when do zero and negative prices happen, and how far below the average
-price does solar actually sell?
+price does solar's output clear?
 
 ## Data
 
@@ -76,8 +85,10 @@ price does solar actually sell?
 - **Calibration to REData.** The real-time feed changed method in December 2025, which
   shifted solar and demand levels overnight. Each day's hourly series is scaled so its daily
   total matches the official REData figure; {calibrated:,} of {days:,} days are calibrated.
-- **Capture rate.** Capture price = Σ(price × generation) / Σ(generation). Capture rate =
-  capture price / simple average (baseload) price.
+- **Capture rate.** Capture price = Σ(price × generation) / Σ(generation), and capture rate =
+  capture price / simple average (baseload) price. These are generation-weighted hourly
+  capture prices (an estimate): since the market moved to 15-minute periods, price and
+  output moves within an hour are averaged away.
 - **Blackout exclusion.** The afternoon of {event_days} (the Iberian blackout,
   {event_hours} hours) is left out of every share calculation because measured demand
   collapsed. Its prices stay in, since they were set the day before.

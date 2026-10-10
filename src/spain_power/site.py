@@ -30,7 +30,9 @@ NAV = [
     ("case-study.html", "Case study"),
     ("wholesale-vs-bill.html", "Wholesale ≠ your bill"),
 ]
-BOE = "https://www.boe.es/buscar/doc.php?id="
+BOE = "https://www.boe.es/diario_boe/txt.php?id="
+CIRCULAR_3_2020 = "https://www.boe.es/buscar/act.php?id=BOE-A-2020-1066"
+RD_446_2023 = "https://www.boe.es/eli/es/rd/2023/06/13/446"
 
 CSS = """
 *{box-sizing:border-box}
@@ -69,6 +71,9 @@ th,td{padding:6px 10px;border-bottom:1px solid #e3e6ea;text-align:right;white-sp
 th:first-child,td:first-child{text-align:left}
 th{font-weight:600;background:#f6f7f9}
 code{background:#eef0f3;padding:1px 4px;border-radius:4px;font-size:.92em}
+details{margin-top:8px;font-size:.92rem}
+summary{cursor:pointer;color:#1d5fb4}
+details table{width:auto;min-width:50%;font-size:.88rem}
 .note{border-left:4px solid #eda100;background:#fff8e6;padding:10px 14px;border-radius:0 6px 6px 0}
 footer{max-width:1100px;margin:0 auto;padding:16px;color:#5b6470;font-size:.88rem;
 border-top:1px solid #e3e6ea}
@@ -90,6 +95,11 @@ def payload(df: pd.DataFrame) -> dict:
 
     Prices keep 4 decimals because hourly averages of 15-minute prices have up to four, and
     the count of hours at or below a threshold must not change through rounding.
+
+    ``share`` is the renewables share from ``transform.build_hourly`` (4 dp, ``None`` where it
+    is undefined) and ``bucket`` its ``transform.share_bucket`` index (-1 for none). The
+    bucket is taken from the unrounded share, so the page's bucket means cannot drift from
+    ``transform.share_buckets`` when a share sits next to a bucket edge.
     """
     dates = sorted(df["date"].astype(str).unique())
     index = {d: i for i, d in enumerate(dates)}
@@ -106,6 +116,8 @@ def payload(df: pd.DataFrame) -> dict:
         "solar": mw("solar"),
         "wind": mw("wind"),
         "ren": mw("renewables"),
+        "share": [None if pd.isna(s) else float(s) for s in df["renewables_share"].round(4)],
+        "bucket": [int(b) for b in transform.share_bucket(df["renewables_share"]).cat.codes],
         "ev": [i for i, e in enumerate(df["grid_event"]) if e],
     }
 
@@ -260,7 +272,9 @@ def _chart(key: str, title: str, text: str, alt: str) -> str:
     return (
         f'<section class="card"><h2 id="title-{key}">{html.escape(title)}</h2>'
         f'<p class="muted">{text}</p>'
-        f'<div class="chart" id="chart-{key}" role="img" aria-label="{html.escape(alt)}"></div></section>'
+        f'<div class="chart" id="chart-{key}" role="img" aria-label="{html.escape(alt)}"></div>'
+        "<details><summary>Data summary (text)</summary>"
+        f'<div class="table-wrap" id="summary-{key}"></div></details></section>'
     )
 
 
@@ -283,7 +297,13 @@ def index_html(df: pd.DataFrame) -> str:
                 label_id="kpi-low-label",
             ),
             _kpi("ren", "Renewables share", f"{e['ren']:.1f}%", e["ren"], "of demand, energy-weighted"),
-            _kpi("capture", "Solar capture (€/MWh)", f"{e['capture']:.1f}", e["capture"]),
+            _kpi(
+                "capture",
+                "Solar capture (€/MWh)",
+                f"{e['capture']:.1f}",
+                e["capture"],
+                "generation-weighted, hourly (estimate)",
+            ),
             _kpi("rate", "Solar capture rate", f"{e['rate']:.0f}%", e["rate"], "capture ÷ average price"),
         ]
     )
@@ -317,7 +337,7 @@ full date range.</p></noscript>
             "Each dot is one hour, coloured by hour of day. The black line is the average price per "
             "10-point bucket of renewables share.",
             "Scatter plot of hourly day-ahead price against renewables share of demand, with the "
-            "average price per share bucket falling as the share rises.",
+            "mean price per 10-point share bucket. The bucket means are in the data summary below.",
         )
     }
 {
@@ -325,16 +345,20 @@ full date range.</p></noscript>
             "heatmap",
             titles["heatmap"],
             "Count of hours at or below the threshold, by month and hour of day (Europe/Madrid).",
-            "Heatmap of the number of hours at or below the price threshold, by month and hour of day.",
+            "Heatmap of the number of hours at or below the price threshold, by month and hour of "
+            "day. The five highest cells are in the data summary below.",
         )
     }
 {
         _chart(
             "capture",
             titles["capture"],
-            "Capture price = Σ(price × generation) / Σ(generation). Solar sells below the simple "
-            "average (baseload) price because it produces when prices are lowest.",
-            "Line chart of the monthly baseload price and the solar and wind capture prices.",
+            "Generation-weighted hourly capture prices (an estimate): capture price = "
+            "Σ(price × generation) / Σ(generation), beside the simple average (baseload) price. "
+            "Since 1 Oct 2025 the market clears in 15-minute periods, so price and output moves "
+            "within an hour are averaged away.",
+            "Line chart of the monthly baseload price and the generation-weighted solar and wind "
+            "capture prices. The monthly values are in the data summary below.",
         )
     }
 {
@@ -342,7 +366,8 @@ full date range.</p></noscript>
             "profile",
             titles["profile"],
             "One line per 12-month window, counted back from the latest complete month in the range.",
-            "Line chart of the average day-ahead price by hour of day for each 12-month window.",
+            "Line chart of the average day-ahead price by hour of day for each 12-month window. "
+            "The hourly values are in the data summary below.",
         )
     }
 </div>
@@ -411,8 +436,11 @@ charges, set by MITECO), per kWh and different in each time-of-use period.</li>
 <li><strong>A fixed power term</strong> per contracted kW, which does not depend on consumption
 at all.</li>
 </ul>
-<p>Only customers on an hourly-indexed contract (PVPC or a market pass-through) see the OMIE price
-move their bill at all. A fixed-price contract does not follow it.</p>
+<p>How much the OMIE price moves a bill depends on the contract. Indexed free-market contracts
+(a market pass-through) follow it most directly. The regulated PVPC tariff follows it only partly
+in 2026: <a href="{RD_446_2023}">Real Decreto 446/2023</a> indexes 55% of the PVPC energy cost to
+a basket of futures prices in 2026, and only the rest follows the spot market. A fixed-price
+contract does not follow it.</p>
 
 <h2>Regulated energy terms, 2026</h2>
 <div class="table-wrap"><table>
@@ -422,9 +450,9 @@ move their bill at all. A fixed-price contract does not follow it.</p>
 </table></div>
 <p class="muted">Peajes: CNMC Resolución of 18 Dec 2025
 (<a href="{BOE}BOE-A-2025-26348">BOE-A-2025-26348</a>). Cargos: Orden TED/1524/2025
-(<a href="{BOE}BOE-A-2025-26705">BOE-A-2025-26705</a>), segment 1. Periods: CNMC Circular 3/2020,
-peninsular calendar; Saturdays, Sundays, 6 January and fixed-date national holidays are valle all
-day.</p>
+(<a href="{BOE}BOE-A-2025-26705">BOE-A-2025-26705</a>), segment 1. Periods:
+<a href="{CIRCULAR_3_2020}">CNMC Circular 3/2020</a>, peninsular calendar; Saturdays, Sundays,
+6 January and fixed-date national holidays are valle all day.</p>
 
 <h2>Applied to the hourly data</h2>
 <p>Each hour from {_day(d_min)} to {_day(d_max)} is assigned its 2.0TD period, then the 2026

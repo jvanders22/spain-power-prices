@@ -23,7 +23,7 @@ Analysis of the Spanish day-ahead electricity market against the peninsular gene
 **Questions**
 1. How does the day-ahead price move with the renewables share of demand?
 2. When do zero and negative prices happen (month × hour)?
-3. Solar cannibalisation: how far below the average price does solar actually sell, and is it getting worse?
+3. Solar cannibalisation: how far below the average price does solar's output clear, and is it getting worse?
 
 **Data** (no API token needed; see README for details and licences)
 - Prices: OMIE day-ahead marginal price for Spain (`marginalpdbc` daily files). Since 1 Oct 2025 the market clears in 15-minute periods; they are averaged to clock hours here.
