@@ -1,0 +1,616 @@
+{
+ "meta": {
+  "target": "hourly OMIE day-ahead price (Spain) <= 0 EUR/MWh",
+  "horizon_days": 2,
+  "data_start": "2024-10-01",
+  "data_end": "2025-03-31",
+  "first_target": "2024-12-07",
+  "last_target": "2025-03-31",
+  "target_days": 115,
+  "hours": 2759,
+  "zero_hours": 379,
+  "min_train_days": 60,
+  "retrain_every_days": 30,
+  "retrains": 4,
+  "seed": 0,
+  "model": "sklearn HistGradientBoostingClassifier",
+  "model_params": {
+   "max_iter": 200,
+   "learning_rate": 0.05,
+   "max_depth": 4,
+   "min_samples_leaf": 40,
+   "l2_regularization": 1.0
+  },
+  "features": {
+   "calendar": [
+    "hour",
+    "dow",
+    "is_weekend",
+    "is_holiday",
+    "doy_sin",
+    "doy_cos"
+   ],
+   "prices": [
+    "p_d1",
+    "p_d2",
+    "p_d3",
+    "p_d7",
+    "d1_zero_hours",
+    "d1_min",
+    "d1_mean",
+    "d1_midday",
+    "d2_zero_hours",
+    "zshare7_h",
+    "zshare28_h",
+    "zero_hours_7d",
+    "days_since_zero"
+   ],
+   "weather": [
+    "wx_rad",
+    "wx_wind",
+    "wx_wind3",
+    "wx_temp",
+    "wx_rad_day",
+    "wx_wind_day",
+    "wx_temp_day",
+    "wx_rad_d1",
+    "wx_wind_d1",
+    "wx_rad_day_d1",
+    "wx_wind_day_d1"
+   ]
+  },
+  "weather_lead": "previous_day3",
+  "weather_points": [
+   "seville",
+   "badajoz",
+   "ciudad_real",
+   "zaragoza",
+   "burgos",
+   "a_coruna"
+  ],
+  "weather_attribution": "Weather forecasts by Open-Meteo.com (CC BY 4.0)",
+  "tuned_threshold_median": 0.43,
+  "tuned_threshold_range": [
+   0.16,
+   0.56
+  ]
+ },
+ "labels": {
+  "model": "Model, p ≥ 0.5",
+  "model_tuned": "Model, threshold tuned on training data",
+  "model_no_weather": "Model without weather, p ≥ 0.5",
+  "same_as_d1": "Baseline: same as D+1",
+  "last_week": "Baseline: same hour last week",
+  "climatology": "Baseline: climatology (month × hour)"
+ },
+ "overall": {
+  "model": {
+   "precision": 0.8984,
+   "recall": 0.9103,
+   "f1": 0.9043,
+   "tp": 345,
+   "fp": 39,
+   "fn": 34,
+   "brier": 0.019,
+   "days": 115,
+   "zero_days": 114,
+   "day_exact": 0.4957,
+   "day_exact_zero_days": 0.5,
+   "day_any": 0.9913,
+   "hours": 2759,
+   "zero_hours": 379,
+   "predicted_hours": 384
+  },
+  "model_tuned": {
+   "precision": 0.8906,
+   "recall": 0.9235,
+   "f1": 0.9067,
+   "tp": 350,
+   "fp": 43,
+   "fn": 29,
+   "brier": 0.019,
+   "days": 115,
+   "zero_days": 114,
+   "day_exact": 0.5043,
+   "day_exact_zero_days": 0.5088,
+   "day_any": 0.9913,
+   "hours": 2759,
+   "zero_hours": 379,
+   "predicted_hours": 393
+  },
+  "model_no_weather": {
+   "precision": 0.5971,
+   "recall": 0.657,
+   "f1": 0.6256,
+   "tp": 249,
+   "fp": 168,
+   "fn": 130,
+   "brier": 0.0653,
+   "days": 115,
+   "zero_days": 114,
+   "day_exact": 0.0261,
+   "day_exact_zero_days": 0.0263,
+   "day_any": 0.9739,
+   "hours": 2759,
+   "zero_hours": 379,
+   "predicted_hours": 417
+  },
+  "same_as_d1": {
+   "precision": 0.5816,
+   "recall": 0.5831,
+   "f1": 0.5823,
+   "tp": 221,
+   "fp": 159,
+   "fn": 158,
+   "brier": 0.1149,
+   "days": 115,
+   "zero_days": 114,
+   "day_exact": 0.0174,
+   "day_exact_zero_days": 0.0175,
+   "day_any": 0.9826,
+   "hours": 2759,
+   "zero_hours": 379,
+   "predicted_hours": 380
+  },
+  "last_week": {
+   "precision": 0.5958,
+   "recall": 0.5989,
+   "f1": 0.5974,
+   "tp": 227,
+   "fp": 154,
+   "fn": 152,
+   "brier": 0.1109,
+   "days": 115,
+   "zero_days": 114,
+   "day_exact": 0.0348,
+   "day_exact_zero_days": 0.0351,
+   "day_any": 0.9826,
+   "hours": 2759,
+   "zero_hours": 379,
+   "predicted_hours": 381
+  },
+  "climatology": {
+   "precision": 0.6561,
+   "recall": 0.7098,
+   "f1": 0.6819,
+   "tp": 269,
+   "fp": 141,
+   "fn": 110,
+   "brier": 0.0683,
+   "days": 115,
+   "zero_days": 114,
+   "day_exact": 0.0435,
+   "day_exact_zero_days": 0.0439,
+   "day_any": 0.9913,
+   "hours": 2759,
+   "zero_hours": 379,
+   "predicted_hours": 410
+  }
+ },
+ "by_season": {
+  "Winter (Dec–Feb)": {
+   "model": {
+    "precision": 0.917,
+    "recall": 0.9007,
+    "f1": 0.9088,
+    "tp": 254,
+    "fp": 23,
+    "fn": 28,
+    "brier": 0.0192,
+    "days": 84,
+    "zero_days": 83,
+    "day_exact": 0.5,
+    "day_exact_zero_days": 0.506,
+    "day_any": 0.9881,
+    "hours": 2016,
+    "zero_hours": 282,
+    "predicted_hours": 277
+   },
+   "model_tuned": {
+    "precision": 0.8993,
+    "recall": 0.9184,
+    "f1": 0.9088,
+    "tp": 259,
+    "fp": 29,
+    "fn": 23,
+    "brier": 0.0192,
+    "days": 84,
+    "zero_days": 83,
+    "day_exact": 0.5238,
+    "day_exact_zero_days": 0.5301,
+    "day_any": 0.9881,
+    "hours": 2016,
+    "zero_hours": 282,
+    "predicted_hours": 288
+   },
+   "model_no_weather": {
+    "precision": 0.6081,
+    "recall": 0.6383,
+    "f1": 0.6228,
+    "tp": 180,
+    "fp": 116,
+    "fn": 102,
+    "brier": 0.0661,
+    "days": 84,
+    "zero_days": 83,
+    "day_exact": 0.0238,
+    "day_exact_zero_days": 0.0241,
+    "day_any": 0.9643,
+    "hours": 2016,
+    "zero_hours": 282,
+    "predicted_hours": 296
+   },
+   "same_as_d1": {
+    "precision": 0.5872,
+    "recall": 0.5851,
+    "f1": 0.5861,
+    "tp": 165,
+    "fp": 116,
+    "fn": 117,
+    "brier": 0.1156,
+    "days": 84,
+    "zero_days": 83,
+    "day_exact": 0.0238,
+    "day_exact_zero_days": 0.0241,
+    "day_any": 0.9762,
+    "hours": 2016,
+    "zero_hours": 282,
+    "predicted_hours": 281
+   },
+   "last_week": {
+    "precision": 0.6159,
+    "recall": 0.6028,
+    "f1": 0.6093,
+    "tp": 170,
+    "fp": 106,
+    "fn": 112,
+    "brier": 0.1081,
+    "days": 84,
+    "zero_days": 83,
+    "day_exact": 0.0476,
+    "day_exact_zero_days": 0.0482,
+    "day_any": 0.9762,
+    "hours": 2016,
+    "zero_hours": 282,
+    "predicted_hours": 276
+   },
+   "climatology": {
+    "precision": 0.6624,
+    "recall": 0.7305,
+    "f1": 0.6948,
+    "tp": 206,
+    "fp": 105,
+    "fn": 76,
+    "brier": 0.0698,
+    "days": 84,
+    "zero_days": 83,
+    "day_exact": 0.0238,
+    "day_exact_zero_days": 0.0241,
+    "day_any": 0.9881,
+    "hours": 2016,
+    "zero_hours": 282,
+    "predicted_hours": 311
+   }
+  },
+  "Spring (Mar–May)": {
+   "model": {
+    "precision": 0.8505,
+    "recall": 0.9381,
+    "f1": 0.8922,
+    "tp": 91,
+    "fp": 16,
+    "fn": 6,
+    "brier": 0.0184,
+    "days": 31,
+    "zero_days": 31,
+    "day_exact": 0.4839,
+    "day_exact_zero_days": 0.4839,
+    "day_any": 1.0,
+    "hours": 743,
+    "zero_hours": 97,
+    "predicted_hours": 107
+   },
+   "model_tuned": {
+    "precision": 0.8667,
+    "recall": 0.9381,
+    "f1": 0.901,
+    "tp": 91,
+    "fp": 14,
+    "fn": 6,
+    "brier": 0.0184,
+    "days": 31,
+    "zero_days": 31,
+    "day_exact": 0.4516,
+    "day_exact_zero_days": 0.4516,
+    "day_any": 1.0,
+    "hours": 743,
+    "zero_hours": 97,
+    "predicted_hours": 105
+   },
+   "model_no_weather": {
+    "precision": 0.5702,
+    "recall": 0.7113,
+    "f1": 0.633,
+    "tp": 69,
+    "fp": 52,
+    "fn": 28,
+    "brier": 0.0631,
+    "days": 31,
+    "zero_days": 31,
+    "day_exact": 0.0323,
+    "day_exact_zero_days": 0.0323,
+    "day_any": 1.0,
+    "hours": 743,
+    "zero_hours": 97,
+    "predicted_hours": 121
+   },
+   "same_as_d1": {
+    "precision": 0.5657,
+    "recall": 0.5773,
+    "f1": 0.5714,
+    "tp": 56,
+    "fp": 43,
+    "fn": 41,
+    "brier": 0.1131,
+    "days": 31,
+    "zero_days": 31,
+    "day_exact": 0.0,
+    "day_exact_zero_days": 0.0,
+    "day_any": 1.0,
+    "hours": 743,
+    "zero_hours": 97,
+    "predicted_hours": 99
+   },
+   "last_week": {
+    "precision": 0.5429,
+    "recall": 0.5876,
+    "f1": 0.5644,
+    "tp": 57,
+    "fp": 48,
+    "fn": 40,
+    "brier": 0.1184,
+    "days": 31,
+    "zero_days": 31,
+    "day_exact": 0.0,
+    "day_exact_zero_days": 0.0,
+    "day_any": 1.0,
+    "hours": 743,
+    "zero_hours": 97,
+    "predicted_hours": 105
+   },
+   "climatology": {
+    "precision": 0.6364,
+    "recall": 0.6495,
+    "f1": 0.6429,
+    "tp": 63,
+    "fp": 36,
+    "fn": 34,
+    "brier": 0.0639,
+    "days": 31,
+    "zero_days": 31,
+    "day_exact": 0.0968,
+    "day_exact_zero_days": 0.0968,
+    "day_any": 1.0,
+    "hours": 743,
+    "zero_hours": 97,
+    "predicted_hours": 99
+   }
+  },
+  "Summer (Jun–Aug)": {
+   "model": {},
+   "model_tuned": {},
+   "model_no_weather": {},
+   "same_as_d1": {},
+   "last_week": {},
+   "climatology": {}
+  },
+  "Autumn (Sep–Nov)": {
+   "model": {},
+   "model_tuned": {},
+   "model_no_weather": {},
+   "same_as_d1": {},
+   "last_week": {},
+   "climatology": {}
+  }
+ },
+ "best_baseline": {
+  "brier": "climatology",
+  "f1": "climatology"
+ },
+ "vs_baselines": {
+  "same_as_d1": {
+   "a": "model",
+   "b": "same_as_d1",
+   "brier_diff": -0.0959,
+   "brier_ci": [
+    -0.1048,
+    -0.0871
+   ],
+   "f1_diff": 0.322,
+   "f1_ci": [
+    0.2806,
+    0.3637
+   ],
+   "resamples": 2000
+  },
+  "last_week": {
+   "a": "model",
+   "b": "last_week",
+   "brier_diff": -0.0919,
+   "brier_ci": [
+    -0.1012,
+    -0.0829
+   ],
+   "f1_diff": 0.307,
+   "f1_ci": [
+    0.2692,
+    0.3492
+   ],
+   "resamples": 2000
+  },
+  "climatology": {
+   "a": "model",
+   "b": "climatology",
+   "brier_diff": -0.0492,
+   "brier_ci": [
+    -0.0553,
+    -0.0432
+   ],
+   "f1_diff": 0.2224,
+   "f1_ci": [
+    0.1849,
+    0.2589
+   ],
+   "resamples": 2000
+  }
+ },
+ "vs_no_weather": {
+  "a": "model",
+  "b": "model_no_weather",
+  "brier_diff": -0.0463,
+  "brier_ci": [
+   -0.0509,
+   -0.0413
+  ],
+  "f1_diff": 0.2787,
+  "f1_ci": [
+   0.2395,
+   0.3188
+  ],
+  "resamples": 2000
+ },
+ "reliability": [
+  {
+   "bin": "0.0–0.1",
+   "n": 2320,
+   "mean_p": 0.0031,
+   "observed": 0.0052
+  },
+  {
+   "bin": "0.1–0.2",
+   "n": 19,
+   "mean_p": 0.1459,
+   "observed": 0.2632
+  },
+  {
+   "bin": "0.2–0.3",
+   "n": 10,
+   "mean_p": 0.2518,
+   "observed": 0.7
+  },
+  {
+   "bin": "0.3–0.4",
+   "n": 11,
+   "mean_p": 0.3543,
+   "observed": 0.3636
+  },
+  {
+   "bin": "0.4–0.5",
+   "n": 15,
+   "mean_p": 0.4628,
+   "observed": 0.4
+  },
+  {
+   "bin": "0.5–0.6",
+   "n": 15,
+   "mean_p": 0.5398,
+   "observed": 0.4667
+  },
+  {
+   "bin": "0.6–0.7",
+   "n": 11,
+   "mean_p": 0.6427,
+   "observed": 0.7273
+  },
+  {
+   "bin": "0.7–0.8",
+   "n": 30,
+   "mean_p": 0.7527,
+   "observed": 0.5667
+  },
+  {
+   "bin": "0.8–0.9",
+   "n": 34,
+   "mean_p": 0.859,
+   "observed": 0.7647
+  },
+  {
+   "bin": "0.9–1.0",
+   "n": 294,
+   "mean_p": 0.9784,
+   "observed": 0.9762
+  }
+ ],
+ "failures": {
+  "onset": {
+   "days": 0,
+   "zero_hours": 0,
+   "model_days_flagged": 0,
+   "model_recall": null,
+   "d1_recall": null,
+   "week_recall": null
+  },
+  "streak_break": {
+   "days": 1,
+   "model_days_flagged": 1,
+   "model_false_hours": 1,
+   "d1_false_hours": 4
+  },
+  "hour_groups": {
+   "Night (20:00–07:59)": {
+    "zero_hours": 0,
+    "model_precision": 0.0,
+    "model_recall": 0.0,
+    "d1_recall": null,
+    "week_recall": null
+   },
+   "Shoulder (08:00–09:59, 18:00–19:59)": {
+    "zero_hours": 0,
+    "model_precision": 0.0,
+    "model_recall": 0.0,
+    "d1_recall": null,
+    "week_recall": null
+   },
+   "Midday (10:00–17:59)": {
+    "zero_hours": 379,
+    "model_precision": 0.9008,
+    "model_recall": 0.9103,
+    "d1_recall": 0.5831,
+    "week_recall": 0.5989
+   }
+  },
+  "examples": [
+   {
+    "kind": "streak_break",
+    "date": "2025-01-21",
+    "origin": "2025-01-19",
+    "actual_hours": [],
+    "model_hours": [
+     14
+    ],
+    "d1_hours": [
+     11,
+     12,
+     13,
+     15
+    ],
+    "week_hours": [
+     12,
+     15
+    ],
+    "max_p": 0.8953,
+    "min_price": 1.58,
+    "forecast_rad": 217.3485,
+    "forecast_rad_prev": 217.3485,
+    "forecast_wind": 5.3252,
+    "forecast_wind_prev": 6.6193,
+    "d1_zero_hours": 4,
+    "days_since_zero": 1,
+    "solar_share": 0.1552,
+    "solar_share_prev": 0.1552,
+    "wind_share": 0.1907,
+    "wind_share_prev": 0.2368
+   }
+  ]
+ }
+}

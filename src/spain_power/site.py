@@ -1,8 +1,9 @@
-"""Static site: the dashboard, the case study and the wholesale-vs-bill explainer as plain files.
+"""Static site: the dashboard, the case study, the wholesale-vs-bill explainer and the D+2
+forecast backtest as plain files.
 
-``build`` is deterministic (same hourly table in, byte-identical files out) and the result
-needs no network at view time: plotly.js is copied from the installed plotly package and
-there are no external fonts, scripts or styles.
+``build`` is deterministic (same hourly table and backtest results in, byte-identical files
+out) and the result needs no network at view time: plotly.js is copied from the installed
+plotly package and there are no external fonts, scripts or styles.
 """
 
 from __future__ import annotations
@@ -16,10 +17,10 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.offline import get_plotlyjs
 
-from . import case_study, charts, tariff20td, transform
+from . import case_study, charts, forecast, tariff20td, transform
 
 STATIC = Path(__file__).parent / "static"
-REPO_URL = "https://github.com/jvanders22/spain-power-prices"
+REPO_URL = case_study.REPO_URL
 COMPANION_URL = case_study.COMPANION_URL
 ATTRIBUTION = (
     "Data: OMIE (omie.es) and Red Eléctrica (ree.es). Not affiliated. "
@@ -29,6 +30,7 @@ NAV = [
     ("index.html", "Dashboard"),
     ("case-study.html", "Case study"),
     ("wholesale-vs-bill.html", "Wholesale ≠ your bill"),
+    ("forecast.html", "D+2 forecast"),
 ]
 BOE = "https://www.boe.es/diario_boe/txt.php?id="
 CIRCULAR_3_2020 = "https://www.boe.es/buscar/act.php?id=BOE-A-2020-1066"
@@ -50,6 +52,7 @@ main.prose{max-width:760px}
 h1{font-size:1.7rem;line-height:1.25;margin:20px 0 6px}
 h2{font-size:1.15rem;margin:0 0 4px}
 .prose h2{font-size:1.25rem;margin:28px 0 8px}
+h3{font-size:1rem;margin:18px 0 2px}
 .muted{color:#5b6470;font-size:.92rem}
 .card{background:#fff;border:1px solid #e3e6ea;border-radius:8px;padding:14px 16px;margin:14px 0}
 .controls{display:flex;flex-wrap:wrap;gap:12px 18px;align-items:flex-end}
@@ -226,7 +229,14 @@ def md_to_html(md: str) -> str:
 
 
 def _page(
-    title: str, active: str, body: str, data_through: str, *, prose: bool = False, tail: str = ""
+    title: str,
+    active: str,
+    body: str,
+    data_through: str,
+    *,
+    prose: bool = False,
+    tail: str = "",
+    credit: str = "",
 ) -> str:
     current = ' aria-current="page"'
     links = "".join(
@@ -252,7 +262,7 @@ REE generation, hourly.">
 {body}
 </main>
 <footer>
-<p>Data through {_day(data_through)}. {ATTRIBUTION}</p>
+<p>Data through {_day(data_through)}. {ATTRIBUTION}{credit}</p>
 </footer>
 {tail}</body>
 </html>
@@ -385,8 +395,8 @@ are in the <a href="case-study.html">case study</a> and the <a href="{REPO_URL}"
     return _page("Dashboard", "index.html", body, d_max, tail=tail)
 
 
-def case_study_html(df: pd.DataFrame) -> str:
-    body = md_to_html(case_study.render(df))
+def case_study_html(df: pd.DataFrame, forecast_results: dict | None = None) -> str:
+    body = md_to_html(case_study.render(df, forecast_results))
     body += (
         '\n<p class="muted">The charts behind these numbers are on the '
         '<a href="index.html">dashboard</a>; the code is in the '
@@ -480,15 +490,273 @@ local holidays are treated as working days, as the tariff calendar does.</p>"""
     return _page("Wholesale ≠ your bill", "wholesale-vs-bill.html", body, d_max, prose=True)
 
 
-def build(df: pd.DataFrame, out: Path) -> list[Path]:
-    """Write the site under ``out`` and return the files written."""
+# ---- forecast page ---------------------------------------------------------------------
+
+
+def _hour_ranges(hours: list[int]) -> str:
+    """Clock hours as ranges, e.g. ``[11, 12, 13, 20]`` -> ``11:00–13:59, 20:00–20:59 (4 h)``."""
+    hours = sorted(set(hours))
+    if not hours:
+        return "none"
+    runs = [[hours[0], hours[0]]]
+    for h in hours[1:]:
+        if h == runs[-1][1] + 1:
+            runs[-1][1] = h
+        else:
+            runs.append([h, h])
+    return ", ".join(f"{a:02d}:00–{b:02d}:59" for a, b in runs) + f" ({len(hours)} h)"
+
+
+def _fmt(value: float | None, spec: str) -> str:
+    return "–" if value is None else format(value, spec)
+
+
+_METRIC_HEAD = (
+    "<thead><tr><th>Method</th><th>Precision</th><th>Recall</th><th>F1</th><th>Brier</th>"
+    "<th>Exact day</th><th>Exact day, zero days</th><th>Day has a zero hour</th></tr></thead>"
+)
+
+
+def _metric_rows(block: dict, labels: dict) -> str:
+    return "".join(
+        f"<tr><td>{html.escape(labels[key])}</td><td>{_fmt(m['precision'], '.2f')}</td>"
+        f"<td>{_fmt(m['recall'], '.2f')}</td><td>{_fmt(m['f1'], '.2f')}</td>"
+        f"<td>{_fmt(m['brier'], '.3f')}</td><td>{_fmt(m['day_exact'], '.0%')}</td>"
+        f"<td>{_fmt(m['day_exact_zero_days'], '.0%')}</td><td>{_fmt(m['day_any'], '.0%')}</td></tr>"
+        for key, m in block.items()
+        if m
+    )
+
+
+_EXAMPLE_TITLES = {
+    "onset": "first zero hours after a week without any",
+    "streak_break": "a run of zero-hour days breaks",
+    "night": "zero hours at night",
+}
+
+
+def _example_html(e: dict) -> str:
+    def change(now: float | None, before: float | None, spec: str) -> str:
+        return f"{_fmt(now, spec)} (day before: {_fmt(before, spec)})"
+
+    since = e["days_since_zero"]
+    last_zero = (
+        f"more than {forecast.HISTORY_DAYS} days earlier"
+        if since > forecast.HISTORY_DAYS
+        else f"{since} day{'s' if since != 1 else ''} earlier"
+    )
+    return f"""<h3>{_day(e["date"])}: {_EXAMPLE_TITLES[e["kind"]]}</h3>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Hours at or below 0 €/MWh</th></tr></thead>
+<tbody><tr><td>Actual</td><td>{_hour_ranges(e["actual_hours"])}</td></tr>
+<tr><td>Model (p ≥ 0.5)</td><td>{_hour_ranges(e["model_hours"])}</td></tr>
+<tr><td>Same as D+1</td><td>{_hour_ranges(e["d1_hours"])}</td></tr>
+<tr><td>Same hour last week</td><td>{_hour_ranges(e["week_hours"])}</td></tr></tbody>
+</table></div>
+<p class="muted">Forecast made on {_day(e["origin"])}. Highest hourly probability {e["max_p"]:.0%};
+lowest price of the day {e["min_price"]:.2f} €/MWh; the last day with a zero hour was {last_zero}.
+What the model saw: forecast radiation {change(e["forecast_rad"], e["forecast_rad_prev"], ".0f")} W/m²
+and forecast 100 m wind {change(e["forecast_wind"], e["forecast_wind_prev"], ".1f")} m/s, daily means.
+What then happened (realised REE figures, not model inputs): solar covered
+{change(e["solar_share"], e["solar_share_prev"], ".0%")} of demand and wind
+{change(e["wind_share"], e["wind_share_prev"], ".0%")}.</p>"""
+
+
+def forecast_figs(results: dict) -> dict:
+    """The two charts of the forecast page, as full plotly figures (data included)."""
+    figs = {
+        "reliability": charts.fig_reliability(results["reliability"]),
+        "seasons": charts.fig_forecast_seasons(
+            results["by_season"], results["labels"], ["model", "same_as_d1", "last_week", "climatology"]
+        ),
+    }
+    out = {}
+    for key, fig in figs.items():
+        spec = json.loads(fig.to_json())
+        spec["layout"]["template"] = _template()
+        out[key] = spec
+    return out
+
+
+def forecast_html(results: dict) -> str:
+    """The D+2 forecast page. Every number comes from ``results`` (docs/forecast_results.json)."""
+    m, o, f = results["meta"], results["overall"], results["failures"]
+    labels = results["labels"]
+    model = o["model"]
+    d1 = results["vs_baselines"]["same_as_d1"]
+    nowx = results["vs_no_weather"]
+    onset, breaks = f["onset"], f["streak_break"]
+    params = ", ".join(f"{k} {v:g}" for k, v in m["model_params"].items())
+    points = ", ".join(p.replace("_", " ").title() for p in m["weather_points"]).replace("Coruna", "Coruña")
+    n_features = sum(len(v) for v in m["features"].values())
+    seasons = "".join(
+        f'<tr><th colspan="8" style="text-align:left">{html.escape(season)}: '
+        f"{block['model']['zero_hours']:,} zero hours on {block['model']['days']:,} days</th></tr>"
+        + _metric_rows(block, labels)
+        for season, block in results["by_season"].items()
+        if block.get("model")
+    )
+    reliability = "".join(
+        f"<tr><td>{r['bin']}</td><td>{r['n']:,}</td><td>{r['mean_p']:.1%}</td><td>{r['observed']:.1%}</td></tr>"
+        for r in results["reliability"]
+    )
+    groups = "".join(
+        f"<tr><td>{html.escape(name)}</td><td>{g['zero_hours']:,}</td>"
+        f"<td>{_fmt(g['model_precision'], '.0%')}</td><td>{_fmt(g['model_recall'], '.0%')}</td>"
+        f"<td>{_fmt(g['d1_recall'], '.0%')}</td><td>{_fmt(g['week_recall'], '.0%')}</td></tr>"
+        for name, g in f["hour_groups"].items()
+    )
+    examples = "\n".join(_example_html(e) for e in f["examples"])
+    body = f"""<h1>D+2 forecast of zero-price hours</h1>
+<p class="muted">A prototype and its backtest. At about 13:00 on day D, for each hour of delivery
+day D+2: the probability that the OMIE day-ahead price for Spain clears at or below 0 €/MWh.
+Backtest run on data through <strong>{_day(m["data_end"])}</strong>.</p>
+<p class="note"><strong>Prototype, not a trading signal and not advice.</strong> One backtest on
+{m["target_days"]:,} days. These are wholesale prices:
+<a href="wholesale-vs-bill.html">not what a household pays</a>.</p>
+
+<section class="card">
+<h2>Result</h2>
+<p>{html.escape(case_study.forecast_verdict(results))} Against "same as D+1" the F1 difference is
+{d1["f1_diff"]:+.2f} (95% interval {d1["f1_ci"][0]:+.2f} to {d1["f1_ci"][1]:+.2f}, resampling whole
+days). Dropping the weather forecasts changes the model's F1 by {-nowx["f1_diff"]:+.2f} and its
+Brier score by {-nowx["brier_diff"]:+.3f}.</p>
+<div class="table-wrap"><table>
+{_METRIC_HEAD}
+<tbody>{_metric_rows(o, labels)}</tbody>
+</table></div>
+<p class="muted">{m["target_days"]:,} target days, {_day(m["first_target"])} to
+{_day(m["last_target"])}: {m["zero_hours"]:,} zero hours in {m["hours"]:,}
+({m["zero_hours"] / m["hours"]:.1%}). The positive class is price ≤ 0. Brier: mean squared error of
+the probability, lower is better; the two price baselines count as probabilities of 0 or 1.
+<em>Exact day</em>: share of days where the predicted set of zero hours equals the actual set; a
+day with no zero hours is matched by predicting none, so <em>Exact day, zero days</em> gives the
+same share over the {model["zero_days"]:,} days that had at least one. <em>Day has a zero
+hour</em>: share of days where "at least one zero hour" was called correctly.</p>
+</section>
+
+<section class="card">
+<h2>What the forecast may use</h2>
+<ul>
+<li><strong>Prices through D+1.</strong> The day-ahead result for D+1 is published around 13:00 on
+D and is treated as known. OMIE does not revise published day-ahead prices.</li>
+<li><strong>Weather forecasts issued 72 hours before each target hour</strong> (Open-Meteo
+<code>{m["weather_lead"]}</code> fields; radiation, 100 m wind and temperature at {points}). For
+the last hour of D+2 that is 23:00 on D−1. The 48-hour fields would come from runs started after
+13:00 on D for every afternoon hour, so they are not used. Observed weather is never used.</li>
+<li><strong>The calendar of D+2:</strong> hour, weekday, fixed national holidays, time of year.</li>
+</ul>
+<p><strong>Left out on purpose: REE generation and demand.</strong> The REE figures in this
+repository are today's values, scaled to official daily totals that REE revises for weeks, and
+the version visible at 13:00 on D is not archived. Using them would leak later revisions into
+the backtest, so the model does not see them. They appear below only to explain example days
+after the fact.</p>
+<p>The model is gradient-boosted trees (<code>{html.escape(m["model"])}</code>; {params}; seed
+{m["seed"]}) on {n_features} features. The settings were fixed before the backtest and not tuned
+on it. Training uses every day whose prices are known at D, an expanding window, with a retrain
+every {m["retrain_every_days"]} days ({m["retrains"]} retrains) and at least
+{m["min_train_days"]} training days before the first forecast. The tuned threshold comes from the
+last quarter of each training window (median {m["tuned_threshold_median"]:.2f}).</p>
+<p><strong>Baselines.</strong> <em>Same as D+1</em>: the hour is zero if the same hour of D+1 is.
+<em>Same hour last week</em>: zero if the same hour seven days before D+2 was.
+<em>Climatology</em>: the zero-hour frequency for that month and hour in the training window.</p>
+</section>
+
+<section class="card">
+<h2 id="title-reliability">Calibration</h2>
+<p class="muted">Hours grouped by forecast probability. On the dashed line, a forecast of 70%
+comes true 70% of the time.</p>
+<div class="chart" id="chart-reliability" role="img" aria-label="Reliability chart: observed share
+of zero-price hours against the forecast probability, in ten bins. The values are in the data
+summary below."></div>
+<details><summary>Data summary (text)</summary>
+<div class="table-wrap"><table>
+<thead><tr><th>Forecast bin</th><th>Hours</th><th>Mean forecast</th><th>Observed</th></tr></thead>
+<tbody>{reliability}</tbody>
+</table></div></details>
+</section>
+
+<section class="card">
+<h2 id="title-seasons">By season</h2>
+<p class="muted">Season of the target day. Zero hours are a spring, midday event, so the other
+seasons have few positives and noisier scores.</p>
+<div class="chart" id="chart-seasons" role="img" aria-label="Bar chart of F1 by season for the
+model and the three baselines. The values are in the table below."></div>
+<div class="table-wrap"><table>
+{_METRIC_HEAD}
+<tbody>{seasons}</tbody>
+</table></div>
+</section>
+
+<section class="card">
+<h2>Where it fails</h2>
+<ul>
+<li><strong>The first zero day after a quiet week.</strong> {onset["days"]} days had zero hours
+after seven days without any ({onset["zero_hours"]:,} zero hours). The model flagged
+{onset["model_days_flagged"]} of them and caught {_fmt(onset["model_recall"], ".0%")} of those
+hours. Both price baselines catch none by construction.</li>
+<li><strong>The day a run breaks.</strong> On {breaks["days"]} days D+1 had zero hours and D+2 had
+none. "Same as D+1" called {breaks["d1_false_hours"]:,} hours wrongly on those days; the model
+called {breaks["model_false_hours"]:,}, on {breaks["model_days_flagged"]} of the days.</li>
+<li><strong>Hours outside midday</strong>, which are few and mostly wind-driven:</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>Hours of the day</th><th>Zero hours</th><th>Model precision</th><th>Model recall</th>
+<th>Recall, same as D+1</th><th>Recall, last week</th></tr></thead>
+<tbody>{groups}</tbody>
+</table></div>
+<p>Three days from the backtest, picked by rule: the quiet-week day with the most missed hours,
+the broken run with the most hours wrongly called, and the day with the most missed night hours.</p>
+{examples}
+</section>
+
+<section class="card">
+<h2>Limits</h2>
+<ul>
+<li><strong>One path.</strong> A single rolling backtest over {m["target_days"]:,} days with
+{model["zero_days"]:,} zero-hour days. The intervals above cover day-to-day sampling only.</li>
+<li><strong>Hourly target.</strong> Since 1 Oct 2025 the market clears in 15-minute periods and the
+target is the hourly mean, so a quarter-hour at or below zero inside a positive hour is not
+counted.</li>
+<li><strong>Weather timing.</strong> The 72-hour lead rests on Open-Meteo's description of its
+archived forecasts; the archive mixes weather models and may not match what a user saw live.</li>
+<li><strong>No live run yet.</strong> This page is rebuilt from a committed results file, not from
+daily forecasts.</li>
+</ul>
+<p class="muted">Code: <a href="{REPO_URL}/blob/main/src/spain_power/forecast.py">forecast.py</a>,
+<a href="{REPO_URL}/blob/main/scripts/backtest_forecast.py">backtest_forecast.py</a> and the
+<a href="{REPO_URL}/blob/main/notebooks/forecast.ipynb">forecast notebook</a>.
+{html.escape(m["weather_attribution"])}:
+<a href="https://open-meteo.com/">open-meteo.com</a>
+(<a href="https://creativecommons.org/licenses/by/4.0/">licence</a>).</p>
+</section>"""
+    tail = (
+        f'<script id="forecast-figs" type="application/json">{_json(forecast_figs(results))}</script>\n'
+        '<script src="assets/plotly.min.js"></script>\n'
+        "<script>(function(){var figs=JSON.parse(document.getElementById('forecast-figs').textContent);"
+        "Object.keys(figs).forEach(function(k){Plotly.newPlot('chart-'+k,figs[k].data,figs[k].layout,"
+        "{responsive:true,displaylogo:false});});})();</script>\n"
+    )
+    credit = f" {m['weather_attribution']}."
+    return _page("D+2 forecast", "forecast.html", body, m["data_end"], tail=tail, credit=credit)
+
+
+def build(df: pd.DataFrame, out: Path, forecast_results: dict | None = None) -> list[Path]:
+    """Write the site under ``out`` and return the files written.
+
+    ``forecast_results`` defaults to the committed backtest results
+    (``docs/forecast_results.json``); the build never runs the backtest.
+    """
+    if forecast_results is None:
+        forecast_results = forecast.load_results()
     table = df.drop(columns=["ts"], errors="ignore")
     floats = table.select_dtypes("float").columns
     table = table.assign(**{c: table[c].round(4) for c in floats})
     files = {
         "index.html": index_html(df),
-        "case-study.html": case_study_html(df),
+        "case-study.html": case_study_html(df, forecast_results),
         "wholesale-vs-bill.html": wholesale_html(df),
+        "forecast.html": forecast_html(forecast_results),
         "assets/plotly.min.js": get_plotlyjs(),
         "assets/app.js": (STATIC / "app.js").read_text(encoding="utf-8"),
         "data/hourly.csv": table.to_csv(index=False),

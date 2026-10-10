@@ -15,7 +15,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5", "nbformat", "nbconvert", "ipykernel", "kaleido>=0.2"]
+# scikit-learn is only needed for the D+2 forecast backtest (scripts/backtest_forecast.py) and its tests.
+dev = ["pytest>=8", "ruff>=0.5", "nbformat", "nbconvert", "ipykernel", "kaleido>=0.2", "scikit-learn>=1.5"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -41,3 +42,4 @@ select = ["E", "F", "I", "UP", "B", "BLE"]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/build_notebook.py" = ["E501"]
+"scripts/build_forecast_notebook.py" = ["E501"]

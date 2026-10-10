@@ -8,13 +8,13 @@ import shutil
 import subprocess
 
 import pytest
-from conftest import synthetic_inputs
+from conftest import FIXTURES, synthetic_inputs
 
 from spain_power import site, transform
 from spain_power.cache import PROCESSED, load_hourly
 from spain_power.transform import build_hourly
 
-PAGES = ["index.html", "case-study.html", "wholesale-vs-bill.html"]
+PAGES = ["index.html", "case-study.html", "wholesale-vs-bill.html", "forecast.html"]
 
 # Loads the built page's data and JS; BODY prints JSON for [start, end, threshold] triples.
 NODE = """
@@ -79,9 +79,15 @@ def frame():
 
 
 @pytest.fixture(scope="module")
-def built(frame, tmp_path_factory):
+def results():
+    # A small backtest results file (see conftest.forecast_results); its data ends 31 Mar 2025.
+    return json.loads((FIXTURES / "forecast_results_small.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def built(frame, results, tmp_path_factory):
     out = tmp_path_factory.mktemp("site")
-    site.build(frame, out)
+    site.build(frame, out, results)
     return out
 
 
@@ -110,10 +116,12 @@ def test_pages_are_self_contained(built):
         assert set(re.findall(r'"(https://[^"]+)"', html)) == set(
             re.findall(r'<a href="(https://[^"]+)"', html)
         )
-        for href in ["index.html", "case-study.html", "wholesale-vs-bill.html", site.REPO_URL]:
+        for href in [*PAGES, site.REPO_URL]:
             assert f'href="{href}"' in html, (name, href)
         assert site.ATTRIBUTION in html
-        assert "Data through 9 Oct 2026" in html
+        # The forecast page is dated by its backtest results, not by the hourly table.
+        through = "31 Mar 2025" if name == "forecast.html" else "9 Oct 2026"
+        assert f"Data through {through}" in html
 
 
 def test_embedded_data_parses_and_matches_frame(built, frame):
@@ -162,8 +170,8 @@ def test_expected_kpis_are_embedded(built, frame):
         assert got == pytest.approx(want[key], abs=1e-4), key
 
 
-def test_build_is_deterministic(built, frame, tmp_path):
-    site.build(frame, tmp_path)
+def test_build_is_deterministic(built, frame, results, tmp_path):
+    site.build(frame, tmp_path, results)
     first = sorted(p.relative_to(built) for p in built.rglob("*") if p.is_file())
     assert first == sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*") if p.is_file())
     for rel in first:
@@ -194,6 +202,54 @@ def test_capture_wording_and_chart_summaries(built):
         )
     for name in PAGES:
         assert "actually sell" not in (built / name).read_text(encoding="utf-8"), name
+
+
+def test_forecast_page_renders_from_results(built, results):
+    html = (built / "forecast.html").read_text(encoding="utf-8")
+    o, m = results["overall"], results["meta"]
+    assert "<h1>D+2 forecast of zero-price hours</h1>" in html
+    assert 'href="forecast.html" aria-current="page"' in html
+    for key, label in results["labels"].items():
+        row = re.search(rf"<tr><td>{re.escape(label)}</td>(.*?)</tr>", html)[1]
+        cells = re.findall(r"<td>([^<]*)</td>", row)
+        assert cells[:4] == [
+            f"{o[key]['precision']:.2f}",
+            f"{o[key]['recall']:.2f}",
+            f"{o[key]['f1']:.2f}",
+            f"{o[key]['brier']:.3f}",
+        ], key
+        assert cells[4] == f"{o[key]['day_exact']:.0%}" and cells[6] == f"{o[key]['day_any']:.0%}"
+    assert f"{m['target_days']:,} target days, 7 Dec 2024 to" in html
+    assert "The model beats all three baselines on this backtest" in html
+    assert "previous_day3" in html and "Open-Meteo.com (CC BY 4.0)" in html
+    for r in results["reliability"]:
+        assert f"<td>{r['bin']}</td><td>{r['n']:,}</td><td>{r['mean_p']:.1%}</td>" in html
+    for e in results["failures"]["examples"]:
+        assert site._day(e["date"]) in html
+    # Seasons without target days are left out; undefined numbers show as a dash.
+    assert "Winter (Dec–Feb):" in html and "Summer (Jun–Aug):" not in html
+    assert not re.search(r"\bnan\b|None|null(?!,)", re.sub(r"<script.*?</script>", "", html, flags=re.S))
+    figs = json.loads(
+        re.search(r'<script id="forecast-figs" type="application/json">(.*?)</script>', html, re.S)[1]
+    )
+    assert set(figs) == {"reliability", "seasons"}
+    assert figs["reliability"]["data"][1]["y"] == [r["observed"] for r in results["reliability"]]
+    assert all(f'id="chart-{k}"' in html for k in figs)
+
+
+def test_forecast_page_says_so_when_the_model_loses(results):
+    worse = json.loads(json.dumps(results))
+    worse["overall"]["model"].update(f1=0.123, brier=0.456)
+    html = site.forecast_html(worse)
+    assert "The model does not beat every baseline on this backtest" in html
+    assert "F1 for zero hours is 0.12 against" in html and "Brier score is 0.456 against" in html
+    assert "<td>0.12</td><td>0.456</td>" in html
+
+
+def test_hour_ranges():
+    assert site._hour_ranges([]) == "none"
+    assert site._hour_ranges([11, 12, 13, 20]) == "11:00–13:59, 20:00–20:59 (4 h)"
+    assert site._hour_ranges([2, 2, 3]) == "02:00–03:59 (2 h)"  # the repeated DST hour
 
 
 def test_md_to_html_subset():
@@ -242,7 +298,8 @@ def test_page_charts_match_python(built, frame):
 def test_page_charts_match_python_on_repo_data(tmp_path):
     """The same comparison on the committed hourly table, whose shares do sit near bucket edges."""
     df = load_hourly(PROCESSED)
-    site.build(df, tmp_path)
+    site.build(df, tmp_path)  # with the committed backtest results
+    assert "D+2 forecast" in (tmp_path / "forecast.html").read_text(encoding="utf-8")
     cases = [(df["date"].min(), df["date"].max(), 0.0), ("2025-03-01", "2026-02-28", 10.0)]
     for (start, end, threshold), js in zip(cases, _node(NODE_CHARTS, tmp_path, cases), strict=True):
         _assert_charts_match_python(transform.filter_dates(df, start, end), threshold, js)

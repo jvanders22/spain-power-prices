@@ -3,7 +3,7 @@
 Interactive analysis of the Spanish day-ahead electricity market against the peninsular
 generation mix, Oct 2024 to Oct 2026, built on public data with no API token.
 
-It answers three questions:
+It answers three questions, and adds a prototype D+2 forecast of zero-price hours with a backtest:
 
 1. How does the day-ahead price move as renewables cover more of demand?
 2. When do zero and negative prices happen, by month and hour?
@@ -68,6 +68,54 @@ sets the 2026 regulated energy terms beside the hourly prices as an illustration
 2.0TD/3.0TD calculator is in the companion repo,
 [spain-negative-price-alert](https://github.com/jvanders22/spain-negative-price-alert/blob/main/docs/tariffs.md).
 
+### D+2 forecast of zero-price hours (prototype)
+
+`src/spain_power/forecast.py` forecasts, at about 13:00 Europe/Madrid on day D, the probability
+that each hour of delivery day D+2 clears at or below 0 EUR/MWh, and backtests it against three
+baselines. The results, including where it fails, are in the case study below (generated from
+[`docs/forecast_results.json`](docs/forecast_results.json)), on the site's
+[`forecast.html`](https://jvanders22.github.io/spain-power-prices/forecast.html) page and in
+[`notebooks/forecast.ipynb`](notebooks/forecast.ipynb).
+
+- **Information cut-off** (`forecast.available_at`). OMIE day-ahead prices through the end of
+  D+1, since the result for D+1 is published around 13:00 on D (OMIE does not revise them), and
+  the calendar of D+2. Features are computed from inputs already cut at that limit, and the
+  tests scramble everything after it and check that no feature moves.
+- **No REE inputs.** REE generation and demand are deliberately left out: the hourly table holds
+  today's values, calibrated to daily totals that REE revises for weeks, and the version visible
+  at 13:00 on D is not archived. A test randomises every REE column and checks that no feature
+  moves. Realised REE shares appear only to explain example days after the fact.
+- **Weather.** Archived *forecasts* from Open-Meteo's Previous Runs API at six points (Seville,
+  Badajoz, Ciudad Real, Zaragoza, Burgos, A Coruña), using only the `_previous_day3` fields: the
+  value predicted 72 hours before each hour, so 23:00 on D-1 at the latest. The `_previous_day2`
+  fields would come from runs started after 13:00 on D for every afternoon hour of D+2, so they
+  are not used. Observed or reanalysis weather is never a feature. The archive covers the whole
+  history, so there is one backtest period. Raw responses are cached in `data/weather/`.
+- **Model.** Gradient-boosted trees (scikit-learn `HistGradientBoostingClassifier`, fixed seed):
+  the signal is in thresholds and interactions (hour × season × radiation × yesterday's price),
+  missing values need no handling, and a fit takes about a second. The settings were fixed
+  before the backtest and not tuned on it.
+- **Backtest.** Rolling origin, one forecast per day, expanding training window, at least 90
+  training days. Retraining is weekly rather than monthly because the zero-hour season turns
+  within weeks. The F1-maximising threshold is chosen on the last quarter of each training
+  window, never on the days being scored.
+- **Target.** Hourly prices, which since 1 Oct 2025 are the mean of four 15-minute prices. A
+  quarter-hour at or below zero inside an hour with a positive mean is not counted. On the
+  October DST fold, a repeated 02:00 counts as a zero hour-of-day for the features and
+  baselines if either of its delivery hours was at or below zero.
+
+The backtest is a manual step and CI never runs it or touches the network:
+
+```bash
+python scripts/backtest_forecast.py     # ~10 min; writes docs/forecast_results.json and
+                                        # data/processed/forecast_backtest.parquet
+python scripts/build_case_study.py      # refresh the generated text
+python scripts/build_site.py
+```
+
+The site and the case study read the committed results file, so they show the backtest as of
+its own "data through" date until the script is run again.
+
 <!-- case-study:start -->
 ## Case study: Spanish power prices vs renewables
 
@@ -127,6 +175,36 @@ Two Oct–Sep windows, so both cover a full seasonal cycle: Oct 2024–Sep 2025 
   fell from 38.9 to 25.3 EUR/MWh, while the 19:00–22:59
   price rose from 106.5 to 115.3.
 
+### D+2 forecast of zero-price hours
+
+A prototype forecasts, at 13:00 on day D, the probability that each hour of day D+2 clears at
+or below 0 EUR/MWh. It is a gradient-boosted tree model on OMIE day-ahead prices through D+1
+(published by 13:00 on D and never revised), the calendar of D+2 and archived weather forecasts
+issued 72 hours ahead (Open-Meteo). REE generation and demand are left out because only
+today's revised figures are available, which would leak into a backtest. The backtest is
+rolling-origin: one forecast per day for 641 days (6 Jan 2025 to
+8 Oct 2026; 1,708 zero hours in 15,383), an expanding
+training window and a retrain every 7 days.
+
+- **Against the baselines.** The model beats all three baselines on this backtest: F1 for zero hours is 0.77 against 0.67 for the best baseline ("same as D+1"), and the Brier score is 0.037 against 0.069 (climatology; lower is better).
+- **Weather forecasts help.** The same model without them scores
+  F1 0.74 and Brier 0.043.
+- **It rarely gets a whole day right.** On days with at least one zero hour, the predicted
+  set of hours matched exactly on 16% of them. Whether a day
+  has any zero hour at all was called correctly on 87% of days
+  (80% for "same as D+1").
+- **It misses the turns.** Of 12 days with zero hours after a week without
+  any, it flagged 2. Its recall on zero hours between 20:00
+  and 07:59, mostly windy nights, is 33%, below the 51% of "same as D+1". The weakest season
+  is autumn (Sep–Nov), with F1 0.50.
+- **Tuning the threshold on training data did not pay.**
+  It moves F1 from 0.77 to 0.75.
+
+The full table, the calibration chart, the season breakdown and dated failures are on the
+[forecast page](https://jvanders22.github.io/spain-power-prices/forecast.html) and in the
+[forecast notebook](https://github.com/jvanders22/spain-power-prices/blob/main/notebooks/forecast.ipynb). It is a prototype on one
+backtest path, not a trading signal.
+
 ### Engineering choices
 
 - A pure-Python pipeline (pandas): no database, no API token, a GitHub Actions cron.
@@ -148,7 +226,8 @@ Python ones.
 
 - A toll-aware retail estimate (what a zero-price hour means on a 2.0TD or 3.0TD bill),
   started in the [companion repo](https://github.com/jvanders22/spain-negative-price-alert).
-- A D+2 forecast of zero-price hours, with a backtest.
+- For the D+2 forecast: archived point-in-time REE data as an extra input, the 15-minute
+  prices as the target, and a live daily run scored against the backtest.
 - Intraday and balancing prices, which this day-ahead view leaves out.
 - Portugal, whose price is already in the OMIE files.
 <!-- case-study:end -->
@@ -158,6 +237,7 @@ Python ones.
 ```
 app/streamlit_app.py        interactive dashboard (date filter, threshold, KPIs, 4 tabs, CSV export)
 notebooks/analysis.ipynb    the analysis, executed, with static charts that render on GitHub
+notebooks/forecast.ipynb    the D+2 forecast backtest: tables, calibration, failures (executed)
 src/spain_power/
   omie.py                   OMIE day-ahead price files: parse, 15-min -> hourly, DST-safe
   ree.py                    REE real-time generation mix + REData daily totals
@@ -168,20 +248,27 @@ src/spain_power/
   findings.py               headline numbers used in this README
   case_study.py             case-study text, generated from findings
   tariff20td.py             2.0TD periods, holidays and 2026 peajes + cargos
+  forecast.py               D+2 zero-hour forecast: cut-off, features, baselines, metrics, backtest
+  weather.py                Open-Meteo previous-runs client (72-hour-ahead forecasts) + JSON cache
   site.py                   static site builder (pages, embedded data, figure specs)
   static/app.js             the static dashboard's filters, KPIs and charts (plain JS + plotly.js)
 scripts/
   refresh.py                incremental daily refresh (+ rebuild of hourly.parquet)
-  build_site.py             static site -> _site/ (dashboard, case study, wholesale-vs-bill)
+  build_site.py             static site -> _site/ (dashboard, case study, wholesale-vs-bill, forecast)
+  backtest_forecast.py      D+2 forecast backtest -> docs/forecast_results.json (manual, ~10 min)
   build_case_study.py       docs/case_study.md + the README case-study section (--check in CI)
   render_figures.py         README chart PNGs (kaleido)
   screenshot_app.py         dashboard screenshot (playwright)
   build_notebook.py         regenerates the notebook source
+  build_forecast_notebook.py  regenerates the forecast notebook source
   export_video_data.py      numbers for the explainer video
 tests/                      offline pytest tests using recorded fixtures
 docs/case_study.md          the case study (generated)
+docs/forecast_results.json  backtest metrics read by the site, case study and notebook (generated)
 video/                      Remotion explainer video
 data/processed/hourly.parquet   the hourly dataset (committed so the app runs on clone)
+data/processed/forecast_backtest.parquet   one row per forecast hour of the backtest
+data/weather/               cached Open-Meteo responses (weather forecasts, CC BY 4.0)
 .github/workflows/          ci.yml (lint, tests, site build), refresh.yml (daily data), pages.yml (deploy)
 ```
 
@@ -195,8 +282,10 @@ streamlit run app/streamlit_app.py      # dashboard on http://localhost:8501
 python scripts/refresh.py               # pull new days (first run without data/raw: ~10 min)
 python scripts/build_site.py            # static site in _site/ (python -m http.server -d _site)
 python scripts/build_case_study.py      # regenerate docs/case_study.md and the README section
+python scripts/backtest_forecast.py     # rerun the D+2 forecast backtest (manual, ~10 min)
 pytest -q && ruff check .
 jupyter nbconvert --to notebook --execute --inplace notebooks/analysis.ipynb
+jupyter nbconvert --to notebook --execute --inplace notebooks/forecast.ipynb
 ```
 
 `refresh.py` defaults to the last 24 months. Use `--start` / `--end` for other ranges.
@@ -219,6 +308,7 @@ table back to the repo, set the repository variable `COMMIT_DATA=true`.
 | Demand and generation by technology, peninsular | REE real-time demand viewer feed ([demanda.ree.es](https://demanda.ree.es)) | none | 5-min |
 | Official daily generation and demand, peninsular | [REE REData API](https://www.ree.es/en/datos/apidata) (`apidatos.ree.es`) | none | daily |
 | (optional) ESIOS indicators | [ESIOS](https://www.esios.ree.es) | `ESIOS_TOKEN` | — |
+| Weather forecasts issued 72 h ahead, six points (forecast only) | [Open-Meteo](https://open-meteo.com) Previous Runs API | none | hourly |
 
 Method notes:
 
@@ -262,7 +352,11 @@ Canary systems are excluded.
   non-commercial purposes; commercial use needs REE's prior written authorisation
   ([aviso legal](https://www.ree.es/es/aviso-legal)). *Source: Red Eléctrica, REData and
   demand monitoring.*
-- This project is not affiliated with OMIE or Red Eléctrica. The code is MIT-licensed (see
+- **Open-Meteo:** weather forecast data by [Open-Meteo.com](https://open-meteo.com/), licensed
+  under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The free API is for
+  non-commercial use ([terms](https://open-meteo.com/en/terms)); the cached responses in
+  `data/weather/` are redistributed under the same licence, unmodified.
+- This project is not affiliated with OMIE, Red Eléctrica or Open-Meteo. The code is MIT-licensed (see
   [LICENSE](LICENSE)). The licence does not cover the third-party data.
 
 ## Video explainer
