@@ -9,6 +9,9 @@ It answers three questions:
 2. When do zero and negative prices happen, by month and hour?
 3. **Solar cannibalisation:** how far below the average price does solar's output clear, and is the gap widening?
 
+**Live dashboard:** <https://jvanders22.github.io/spain-power-prices/> (after Pages is enabled).
+It is a static build of the dashboard below, so it loads instantly and never sleeps.
+
 ![Dashboard](docs/img/dashboard.png)
 
 ## Key findings
@@ -54,6 +57,100 @@ Oct–Sep years, so both cover a full seasonal cycle. All numbers are computed i
 <td><img src="docs/img/hourly_profile.png" alt="Average price by hour of day"></td></tr>
 </table>
 
+### Wholesale is not your bill
+
+Everything here is the OMIE day-ahead price: the wholesale price of energy at the busbar. A
+2.0TD household or small-business bill adds losses and system services, peajes (CNMC) and cargos
+(MITECO) by time-of-use period, the electricity tax and VAT, plus a fixed power term. The static
+site's [`wholesale-vs-bill.html`](https://jvanders22.github.io/spain-power-prices/wholesale-vs-bill.html)
+page (source: `src/spain_power/site.py`, calendar and 2026 terms in `src/spain_power/tariff20td.py`)
+sets the 2026 regulated energy terms beside the hourly prices as an illustration. The full
+2.0TD/3.0TD calculator is in the companion repo,
+[spain-negative-price-alert](https://github.com/jvanders22/spain-negative-price-alert/blob/main/docs/tariffs.md).
+
+<!-- case-study:start -->
+## Case study: Spanish power prices vs renewables
+
+### Problem
+
+Spain keeps adding solar, and the day-ahead market shows it: midday prices sink while evening
+prices hold. I wanted to measure that with public data: how does the price move as renewables
+cover more of demand, when do zero and negative prices happen, and how far below the average
+price does solar actually sell?
+
+### Data
+
+- **Prices:** OMIE day-ahead marginal price for Spain (`marginalpdbc` daily files), hourly
+  until the market moved to 15-minute periods on 1 Oct 2025.
+- **Generation and demand:** Red Eléctrica's peninsular real-time feed (5-minute readings)
+  and the official daily totals from its REData API.
+- **Coverage:** 1 Oct 2024 to 9 Oct 2026, 17,735 hourly rows
+  over 739 days. No API token is needed.
+- **Licences:** OMIE allows free reuse with the source cited; REE allows informative,
+  non-commercial reuse with attribution.
+
+### Method
+
+- **DST-safe hourly prices.** The 15-minute periods are averaged to clock hours with
+  timestamps built in UTC, so the 23- and 25-hour days come out right.
+- **Calibration to REData.** The real-time feed changed method in December 2025, which
+  shifted solar and demand levels overnight. Each day's hourly series is scaled so its daily
+  total matches the official REData figure; 738 of 739 days are calibrated.
+- **Capture rate.** Capture price = Σ(price × generation) / Σ(generation). Capture rate =
+  capture price / simple average (baseload) price.
+- **Blackout exclusion.** The afternoon of 28 Apr 2025 (the Iberian blackout,
+  12 hours) is left out of every share calculation because measured demand
+  collapsed. Its prices stay in, since they were set the day before.
+
+### Findings
+
+Two Oct–Sep windows, so both cover a full seasonal cycle: Oct 2024–Sep 2025 and Oct 2025–Sep 2026.
+
+- **Prices fall as renewables rise.** Hourly price and renewables share correlate at
+  -0.72. Below a 40% share the average price is
+  133.6 EUR/MWh; at 80% or more it is 12.9.
+- **Zero-price hours cluster at midday.** Hours at or below 0 EUR/MWh
+  rose from 775 to 944
+  (8.8% and 10.8% of hours), and
+  91% of all of them fell between 10:00 and 17:59. The peak
+  month was May 2025 with 269. The lowest hourly price was
+  -15 EUR/MWh.
+- **Solar cannibalises its own price.** Solar's share of demand
+  rose from 21.5% to 24.9% and its capture rate
+  fell from 56% to 53%
+  (40.1 and 38.9 EUR/MWh against a baseload of
+  71.3 and 73.3). In the worst complete month,
+  May 2025, solar captured 17% of baseload.
+- **The duck curve.** The average 11:00–16:59 price
+  fell from 38.9 to 25.3 EUR/MWh, while the 19:00–22:59
+  price rose from 106.5 to 115.3.
+
+### Engineering choices
+
+- A pure-Python pipeline (pandas): no database, no API token, a GitHub Actions cron.
+- A per-day parquet cache, so a refresh only fetches new days, and a committed hourly table,
+  so everything runs on clone.
+- One set of Plotly figure builders shared by the Streamlit app, the notebook and the static
+  site.
+- A deterministic static build: the same data gives a byte-identical site, with no CDN.
+- Offline tests with recorded fixtures of the real OMIE and REE responses.
+
+### Tests and CI
+
+An offline pytest suite in `tests/` runs in CI on every push to `main` and every pull
+request, with ruff lint and format checks. CI also builds the static site, checks that this
+text matches its generator, and checks with Node that the page's JavaScript KPIs equal the
+Python ones.
+
+### What I'd do next
+
+- A toll-aware retail estimate (what a zero-price hour means on a 2.0TD or 3.0TD bill),
+  started in the [companion repo](https://github.com/jvanders22/spain-negative-price-alert).
+- A D+2 forecast of zero-price hours, with a backtest.
+- Intraday and balancing prices, which this day-ahead view leaves out.
+- Portugal, whose price is already in the OMIE files.
+<!-- case-study:end -->
+
 ## What's in the repo
 
 ```
@@ -65,15 +162,25 @@ src/spain_power/
   esios.py                  optional ESIOS client (needs ESIOS_TOKEN; not used by default)
   cache.py                  per-day parquet cache in data/raw, combined table in data/processed
   transform.py              join, calibration, renewables share, capture prices, KPIs
-  charts.py                 plotly figures shared by the app, notebook and README images
+  charts.py                 plotly figures shared by the app, notebook, static site and README images
   findings.py               headline numbers used in this README
+  case_study.py             case-study text, generated from findings
+  tariff20td.py             2.0TD periods, holidays and 2026 peajes + cargos
+  site.py                   static site builder (pages, embedded data, figure specs)
+  static/app.js             the static dashboard's filters, KPIs and charts (plain JS + plotly.js)
 scripts/
   refresh.py                incremental daily refresh (+ rebuild of hourly.parquet)
+  build_site.py             static site -> _site/ (dashboard, case study, wholesale-vs-bill)
+  build_case_study.py       docs/case_study.md + the README case-study section (--check in CI)
   render_figures.py         README chart PNGs (kaleido)
   screenshot_app.py         dashboard screenshot (playwright)
   build_notebook.py         regenerates the notebook source
-tests/                      41 offline pytest tests using recorded fixtures
+  export_video_data.py      numbers for the explainer video
+tests/                      offline pytest tests using recorded fixtures
+docs/case_study.md          the case study (generated)
+video/                      Remotion explainer video
 data/processed/hourly.parquet   the hourly dataset (committed so the app runs on clone)
+.github/workflows/          ci.yml (lint, tests, site build), refresh.yml (daily data), pages.yml (deploy)
 ```
 
 ## Run it
@@ -84,13 +191,20 @@ pip install -e ".[dev]"
 
 streamlit run app/streamlit_app.py      # dashboard on http://localhost:8501
 python scripts/refresh.py               # pull new days (first run without data/raw: ~10 min)
+python scripts/build_site.py            # static site in _site/ (python -m http.server -d _site)
+python scripts/build_case_study.py      # regenerate docs/case_study.md and the README section
 pytest -q && ruff check .
 jupyter nbconvert --to notebook --execute --inplace notebooks/analysis.ipynb
 ```
 
 `refresh.py` defaults to the last 24 months. Use `--start` / `--end` for other ranges.
 
-CI (`.github/workflows/ci.yml`) runs lint and tests on pushes to `main` and on pull requests.
+CI (`.github/workflows/ci.yml`) runs lint and tests on pushes to `main` and on pull requests,
+checks that the case study matches its generator, builds the static site and uploads it as the
+`static-site` artifact. `.github/workflows/pages.yml` builds the same site and deploys it to
+GitHub Pages once the repository variable `PAGES_ENABLED=true` is set (Pages on the Free plan
+needs a public repo). The build is deterministic and has no CDN or other external requests:
+plotly.js is copied from the installed plotly package.
 `.github/workflows/refresh.yml` runs the refresh and tests daily at 14:30 UTC, after OMIE
 publishes next-day prices, and uploads the new table as an artifact. To have it commit the
 table back to the repo, set the repository variable `COMMIT_DATA=true`.
@@ -151,4 +265,4 @@ Canary systems are excluded.
 
 ## Video explainer
 
-A 20-second animated explainer of the solar findings (Remotion, 1080×1080) lives in [`video/`](video/README.md). Numbers are exported from the processed data by `scripts/export_video_data.py`.
+A 26.5-second animated explainer of the solar findings (Remotion, 1080×1080) lives in [`video/`](video/README.md). Numbers are exported from the processed data by `scripts/export_video_data.py`.
