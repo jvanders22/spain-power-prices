@@ -33,6 +33,9 @@ jobs:
           restore-keys: raw-
       - name: Refresh data
         run: python scripts/refresh.py
+      # The case study (docs/case_study.md + README section) quotes numbers from the table.
+      - name: Regenerate case study
+        run: python scripts/build_case_study.py
       - name: Tests
         run: pytest -q
       - name: Upload hourly table
@@ -48,7 +51,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/processed/hourly.parquet
+          git add data/processed/hourly.parquet docs/case_study.md README.md
           git diff --cached --quiet && exit 0
           git commit -m "data: daily refresh $(date -u +%F)"
           for i in 1 2 3; do

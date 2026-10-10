@@ -18,3 +18,12 @@ jobs:
       - run: ruff check .
       - run: ruff format --check src app scripts tests
       - run: pytest -q
+      - name: Case study is up to date with its generator
+        run: python scripts/build_case_study.py --check
+      - name: Build static site
+        run: python scripts/build_site.py --out _site
+      - uses: actions/upload-artifact@v4
+        with:
+          name: static-site
+          path: _site
+          retention-days: 14
