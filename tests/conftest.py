@@ -45,3 +45,34 @@ def synthetic_inputs(
 @pytest.fixture
 def hourly() -> pd.DataFrame:
     return build_hourly(*synthetic_inputs())
+
+
+def synthetic_weather(hourly: pd.DataFrame) -> pd.DataFrame:
+    """Aggregated "forecasts" (``weather.aggregate`` columns) that track the synthetic output."""
+    rng = np.random.default_rng(1)
+    n = len(hourly)
+    wind = hourly["wind"].to_numpy() / 1000 + rng.normal(0, 0.5, n)
+    return pd.DataFrame(
+        {
+            "ts_utc": hourly["ts_utc"].to_numpy(),
+            "wx_rad": hourly["solar"].to_numpy() / 20,
+            "wx_wind": wind,
+            "wx_wind3": np.clip(wind, 0, 12) ** 3,
+            "wx_temp": 15 + rng.normal(0, 3, n),
+        }
+    ).assign(ts_utc=lambda d: pd.to_datetime(d["ts_utc"], utc=True))
+
+
+@pytest.fixture(scope="session")
+def forecast_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Six months of synthetic hourly data and matching weather, for the forecast tests."""
+    hourly = build_hourly(*synthetic_inputs("2024-10-01", "2025-03-31 23:00"))
+    return hourly, synthetic_weather(hourly)
+
+
+@pytest.fixture
+def forecast_results() -> dict:
+    """A small backtest results file: ``forecast.summarise`` on the synthetic frames."""
+    import json
+
+    return json.loads((FIXTURES / "forecast_results_small.json").read_text(encoding="utf-8"))

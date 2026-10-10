@@ -40,6 +40,24 @@ def test_render_uses_findings_numbers(frame):
     assert case_study.render(frame) == md
 
 
+def test_forecast_section_comes_from_the_results(frame, forecast_results):
+    md = case_study.render(frame, forecast_results)
+    o = forecast_results["overall"]
+    assert "\n## D+2 forecast of zero-price hours\n" in md
+    assert md.index("## Findings") < md.index("## D+2 forecast") < md.index("## Engineering choices")
+    assert "The model beats all three baselines on this backtest" in md
+    best = o[forecast_results["best_baseline"]["f1"]]
+    assert f"F1 for zero hours is {o['model']['f1']:.2f} against {best['f1']:.2f}" in md
+    assert f"The same model without them scores\n  F1 {o['model_no_weather']['f1']:.2f}" in md
+    assert "one forecast per day for 115 days (7 Dec 2024 to" in md
+    assert "nan" not in md.lower() and "None" not in md
+
+    forecast_results["overall"]["model"].update(f1=0.2, brier=0.3)
+    worse = case_study.render(frame, forecast_results)
+    assert "The model does not beat every baseline on this backtest: F1 for zero hours is 0.20" in worse
+    assert "Weather forecasts do not help" in worse
+
+
 def test_render_needs_two_windows(hourly):
     with pytest.raises(ValueError, match="two comparison windows"):
         case_study.render(hourly)

@@ -177,3 +177,58 @@ def fig_hourly_profile(df: pd.DataFrame) -> go.Figure:
     fig.update_xaxes(title="Hour of day (Europe/Madrid)", dtick=1, range=[-0.5, 23.5])
     fig.update_yaxes(title=PRICE)
     return fig
+
+
+def fig_reliability(rows: list[dict]) -> go.Figure:
+    """Calibration of the D+2 forecast: observed zero-hour frequency per forecast-probability bin.
+
+    ``rows`` is ``forecast.reliability`` output (``mean_p``, ``observed``, ``n`` per bin).
+    """
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 1],
+            y=[0, 1],
+            mode="lines",
+            name="Perfect calibration",
+            line=dict(color=INK, width=1, dash="dash"),
+            hoverinfo="skip",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[r["mean_p"] for r in rows],
+            y=[r["observed"] for r in rows],
+            mode="lines+markers",
+            name="Model",
+            line=dict(color=SERIES[0], width=2),
+            marker=dict(size=9, color=SERIES[0]),
+            customdata=[[r["bin"], r["n"]] for r in rows],
+            hovertemplate="Forecast %{x:.0%} (bin %{customdata[0]}, %{customdata[1]:,} hours)"
+            "<br>observed %{y:.0%}<extra></extra>",
+        )
+    )
+    _layout(fig, "Reliability: forecast probability vs observed frequency")
+    fig.update_xaxes(title="Forecast probability of price ≤ 0", tickformat=".0%", range=[-0.02, 1.02])
+    fig.update_yaxes(title="Observed share of hours ≤ 0", tickformat=".0%", range=[-0.02, 1.02])
+    return fig
+
+
+def fig_forecast_seasons(by_season: dict, labels: dict, methods: list[str]) -> go.Figure:
+    """F1 of the D+2 forecast and its baselines per season (``forecast.summarise`` output)."""
+    seasons = [s for s, block in by_season.items() if block.get(methods[0])]
+    fig = go.Figure()
+    for i, key in enumerate(methods):
+        fig.add_trace(
+            go.Bar(
+                x=seasons,
+                y=[by_season[s][key]["f1"] for s in seasons],
+                name=labels[key],
+                marker=dict(color=SERIES[i % len(SERIES)]),
+                hovertemplate=f"{labels[key]}: F1 %{{y:.2f}}<extra></extra>",
+            )
+        )
+    _layout(fig, "F1 for zero-price hours by season", barmode="group")
+    fig.update_xaxes(title="Season of the target day", type="category")
+    fig.update_yaxes(title="F1 (higher is better)", range=[0, 1])
+    return fig
