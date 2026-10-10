@@ -81,9 +81,10 @@ def forecast_section(results: dict) -> str:
     return f"""## D+2 forecast of zero-price hours
 
 A prototype forecasts, at 13:00 on day D, the probability that each hour of day D+2 clears at
-or below 0 EUR/MWh. It is a gradient-boosted tree model on prices through D+1, REE generation
-and demand through D-1, the calendar of D+2 and weather forecasts issued 72 hours ahead
-(Open-Meteo), with every input cut at what was already published. The backtest is
+or below 0 EUR/MWh. It is a gradient-boosted tree model on OMIE day-ahead prices through D+1
+(published by 13:00 on D and never revised), the calendar of D+2 and archived weather forecasts
+issued 72 hours ahead (Open-Meteo). REE generation and demand are left out because only
+today's revised figures are available, which would leak into a backtest. The backtest is
 rolling-origin: one forecast per day for {m["target_days"]:,} days ({_day(m["first_target"])} to
 {_day(m["last_target"])}; {m["zero_hours"]:,} zero hours in {m["hours"]:,}), an expanding
 training window and a retrain every {m["retrain_every_days"]} days.
@@ -214,8 +215,8 @@ Python ones.
 
 - A toll-aware retail estimate (what a zero-price hour means on a 2.0TD or 3.0TD bill),
   started in the [companion repo]({COMPANION_URL}).
-- For the D+2 forecast: point-in-time REE data instead of today's revised values, the
-  15-minute prices as the target, and a live daily run scored against the backtest.
+- For the D+2 forecast: archived point-in-time REE data as an extra input, the 15-minute
+  prices as the target, and a live daily run scored against the backtest.
 - Intraday and balancing prices, which this day-ahead view leaves out.
 - Portugal, whose price is already in the OMIE files.
 """

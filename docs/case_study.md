@@ -59,26 +59,27 @@ Two Oct–Sep windows, so both cover a full seasonal cycle: Oct 2024–Sep 2025 
 ## D+2 forecast of zero-price hours
 
 A prototype forecasts, at 13:00 on day D, the probability that each hour of day D+2 clears at
-or below 0 EUR/MWh. It is a gradient-boosted tree model on prices through D+1, REE generation
-and demand through D-1, the calendar of D+2 and weather forecasts issued 72 hours ahead
-(Open-Meteo), with every input cut at what was already published. The backtest is
+or below 0 EUR/MWh. It is a gradient-boosted tree model on OMIE day-ahead prices through D+1
+(published by 13:00 on D and never revised), the calendar of D+2 and archived weather forecasts
+issued 72 hours ahead (Open-Meteo). REE generation and demand are left out because only
+today's revised figures are available, which would leak into a backtest. The backtest is
 rolling-origin: one forecast per day for 641 days (6 Jan 2025 to
 8 Oct 2026; 1,708 zero hours in 15,383), an expanding
 training window and a retrain every 7 days.
 
-- **Against the baselines.** The model beats all three baselines on this backtest: F1 for zero hours is 0.77 against 0.67 for the best baseline ("same as D+1"), and the Brier score is 0.038 against 0.069 (climatology; lower is better).
+- **Against the baselines.** The model beats all three baselines on this backtest: F1 for zero hours is 0.77 against 0.67 for the best baseline ("same as D+1"), and the Brier score is 0.037 against 0.069 (climatology; lower is better).
 - **Weather forecasts help.** The same model without them scores
-  F1 0.72 and Brier 0.044.
+  F1 0.74 and Brier 0.043.
 - **It rarely gets a whole day right.** On days with at least one zero hour, the predicted
-  set of hours matched exactly on 15% of them. Whether a day
+  set of hours matched exactly on 16% of them. Whether a day
   has any zero hour at all was called correctly on 87% of days
   (80% for "same as D+1").
 - **It misses the turns.** Of 12 days with zero hours after a week without
-  any, it flagged 1. Its recall on zero hours between 20:00
-  and 07:59, mostly windy nights, is 31%, below the 51% of "same as D+1". The weakest season
-  is autumn (Sep–Nov), with F1 0.55.
+  any, it flagged 2. Its recall on zero hours between 20:00
+  and 07:59, mostly windy nights, is 33%, below the 51% of "same as D+1". The weakest season
+  is autumn (Sep–Nov), with F1 0.50.
 - **Tuning the threshold on training data did not pay.**
-  It moves F1 from 0.77 to 0.74.
+  It moves F1 from 0.77 to 0.75.
 
 The full table, the calibration chart, the season breakdown and dated failures are on the
 [forecast page](https://jvanders22.github.io/spain-power-prices/forecast.html) and in the
@@ -106,7 +107,7 @@ Python ones.
 
 - A toll-aware retail estimate (what a zero-price hour means on a 2.0TD or 3.0TD bill),
   started in the [companion repo](https://github.com/jvanders22/spain-negative-price-alert).
-- For the D+2 forecast: point-in-time REE data instead of today's revised values, the
-  15-minute prices as the target, and a live daily run scored against the backtest.
+- For the D+2 forecast: archived point-in-time REE data as an extra input, the 15-minute
+  prices as the target, and a live daily run scored against the backtest.
 - Intraday and balancing prices, which this day-ahead view leaves out.
 - Portugal, whose price is already in the OMIE files.

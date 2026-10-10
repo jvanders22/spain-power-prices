@@ -24,10 +24,11 @@ md("""# D+2 forecast of zero-price hours: backtest
 At about 13:00 Europe/Madrid on day D, for each clock hour of delivery day D+2: the probability that the OMIE day-ahead price for Spain clears at or below 0 EUR/MWh.
 
 **What the forecast may use** (`spain_power.forecast.available_at`)
-- Prices through the end of D+1. The day-ahead result for D+1 is published around 13:00 on D and is treated as known.
-- REE generation and demand through the end of D-1 only. The real-time feed for D is half a day short at 13:00, so D is left out.
+- OMIE day-ahead prices through the end of D+1. The result for D+1 is published around 13:00 on D and is treated as known; OMIE does not revise published day-ahead prices.
 - Weather forecasts issued 72 hours before each target hour (Open-Meteo Previous Runs API, `_previous_day3` fields). For the last hour of D+2 that is 23:00 on D-1. The 48-hour fields would come from runs started after 13:00 on D for every afternoon hour, so they are not used. Observed or reanalysis weather is never used.
 - The calendar of D+2.
+
+**Left out on purpose: REE generation and demand.** The REE figures in this repository are today's values, scaled to official daily totals that REE revises for weeks; the version visible at 13:00 on D is not archived, so using them would leak later revisions into the backtest.
 
 **Backtest.** Rolling origin, one forecast per day, expanding training window, weekly retrain, at least 90 training days. The model is scikit-learn's `HistGradientBoostingClassifier` with settings fixed before the run. Baselines: *same as D+1*, *same hour last week*, and a month × hour *climatology* from the training window.
 
@@ -95,7 +96,7 @@ print(f"Onset days: {o['days']} ({o['zero_hours']} zero hours). Model flagged {o
 print(f"Streak breaks: {b['days']} days. False hours: model {b['model_false_hours']} (on {b['model_days_flagged']} days), same as D+1 {b['d1_false_hours']}.")
 pd.DataFrame(f["hour_groups"]).T""")
 md(
-    "Three days picked by rule: the onset day with the most missed hours, the streak break with the most hours wrongly called, and the day with the most missed night hours. The `forecast_*` values are what the model saw (72-hour-ahead daily means, with the day before in `*_prev`); the `*_share` values are what then happened (share of demand)."
+    "Three days picked by rule: the onset day with the most missed hours, the streak break with the most hours wrongly called, and the day with the most missed night hours. The `forecast_*` values are what the model saw (72-hour-ahead daily means, with the day before in `*_prev`); the `*_share` values are what then happened (realised REE share of demand, never a model input)."
 )
 code("""pd.DataFrame(f["examples"]).set_index("date").T""")
 code("""for e in f["examples"]:
@@ -105,7 +106,6 @@ code("""for e in f["examples"]:
 md("""## 5. Limits
 
 - **One path.** A single rolling backtest; the intervals above cover day-to-day sampling only, not model or period choice.
-- **Revised inputs.** The REE figures are today's values, scaled to official daily totals that REE revises for weeks. A live forecast would see earlier versions.
 - **Hourly target.** Since 1 Oct 2025 the market clears in 15-minute periods and the target is the hourly mean, so a quarter-hour at or below zero inside a positive hour is not counted.
 - **Weather timing.** The 72-hour lead rests on Open-Meteo's description of its archived forecasts; the archive mixes weather models and may not match what a user saw live.
 - **No live run yet.** These are backtest results, not a record of forecasts made in real time.""")

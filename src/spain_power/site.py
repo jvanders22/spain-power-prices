@@ -557,8 +557,9 @@ def _example_html(e: dict) -> str:
 lowest price of the day {e["min_price"]:.2f} €/MWh; the last day with a zero hour was {last_zero}.
 What the model saw: forecast radiation {change(e["forecast_rad"], e["forecast_rad_prev"], ".0f")} W/m²
 and forecast 100 m wind {change(e["forecast_wind"], e["forecast_wind_prev"], ".1f")} m/s, daily means.
-What then happened: solar covered {change(e["solar_share"], e["solar_share_prev"], ".0%")} of
-demand and wind {change(e["wind_share"], e["wind_share_prev"], ".0%")}.</p>"""
+What then happened (realised REE figures, not model inputs): solar covered
+{change(e["solar_share"], e["solar_share_prev"], ".0%")} of demand and wind
+{change(e["wind_share"], e["wind_share_prev"], ".0%")}.</p>"""
 
 
 def forecast_figs(results: dict) -> dict:
@@ -638,15 +639,18 @@ hour</em>: share of days where "at least one zero hour" was called correctly.</p
 <h2>What the forecast may use</h2>
 <ul>
 <li><strong>Prices through D+1.</strong> The day-ahead result for D+1 is published around 13:00 on
-D and is treated as known.</li>
-<li><strong>REE generation and demand through D−1 only.</strong> The real-time feed for D is half
-a day short at 13:00, so day D is left out.</li>
+D and is treated as known. OMIE does not revise published day-ahead prices.</li>
 <li><strong>Weather forecasts issued 72 hours before each target hour</strong> (Open-Meteo
 <code>{m["weather_lead"]}</code> fields; radiation, 100 m wind and temperature at {points}). For
 the last hour of D+2 that is 23:00 on D−1. The 48-hour fields would come from runs started after
 13:00 on D for every afternoon hour, so they are not used. Observed weather is never used.</li>
 <li><strong>The calendar of D+2:</strong> hour, weekday, fixed national holidays, time of year.</li>
 </ul>
+<p><strong>Left out on purpose: REE generation and demand.</strong> The REE figures in this
+repository are today's values, scaled to official daily totals that REE revises for weeks, and
+the version visible at 13:00 on D is not archived. Using them would leak later revisions into
+the backtest, so the model does not see them. They appear below only to explain example days
+after the fact.</p>
 <p>The model is gradient-boosted trees (<code>{html.escape(m["model"])}</code>; {params}; seed
 {m["seed"]}) on {n_features} features. The settings were fixed before the backtest and not tuned
 on it. Training uses every day whose prices are known at D, an expanding window, with a retrain
@@ -711,8 +715,6 @@ the broken run with the most hours wrongly called, and the day with the most mis
 <ul>
 <li><strong>One path.</strong> A single rolling backtest over {m["target_days"]:,} days with
 {model["zero_days"]:,} zero-hour days. The intervals above cover day-to-day sampling only.</li>
-<li><strong>Revised inputs.</strong> The REE figures are today's values, scaled to official daily
-totals that REE revises for weeks. A live forecast would see earlier versions.</li>
 <li><strong>Hourly target.</strong> Since 1 Oct 2025 the market clears in 15-minute periods and the
 target is the hourly mean, so a quarter-hour at or below zero inside a positive hour is not
 counted.</li>
