@@ -3,10 +3,10 @@
 For each local clock hour of delivery day D+2 the model gives P(OMIE price <= 0), using only
 what is known at about 13:00 Europe/Madrid on day D (see :func:`available_at`):
 
-- prices up to the end of D+1: the day-ahead result for D+1 is published around 13:00 on D;
-- REE generation and demand up to the end of D-1 only: the real-time feed for D is half a day
-  short at 13:00, so D is left out altogether;
-- weather forecasts issued 72 hours before each target hour (:mod:`spain_power.weather`);
+- OMIE day-ahead prices up to the end of D+1: the result for D+1 is published around 13:00 on
+  D, and OMIE does not revise published day-ahead prices;
+- weather forecasts issued 72 hours before each target hour (:mod:`spain_power.weather`),
+  taken from Open-Meteo's archive of past runs, never observed weather;
 - the calendar of D+2.
 
 :func:`build_features` first cuts every input at those limits (:func:`select_inputs`) and
@@ -15,8 +15,17 @@ computes features from the cut frames only, so nothing later can reach a feature
 The target is defined on hourly prices. Since 1 Oct 2025 those are means of four 15-minute
 prices, so a quarter-hour at or below zero inside an hour with a positive mean is not counted.
 
-Caveat on vintages: the hourly table holds today's version of the REE data (calibrated to
-REData daily totals, which REE revises for some weeks), not the version visible on day D.
+REE generation and demand are deliberately not used. The hourly table holds today's version
+of the REE data (calibrated to REData daily totals, which REE revises for some weeks), and the
+version visible at 13:00 on D is not archived, so any REE feature would leak later revisions.
+The REE columns may still describe example days after the fact (:func:`failure_analysis`), as
+realised values, never as model inputs.
+
+Daylight-saving folds: a repeated local hour (02:00 on the last Sunday of October) counts as a
+zero hour-of-day if any of its delivery hours was at or below zero; daily zero-hour counts sum
+the original delivery hours; price-level features average the repeated hour. Both target rows
+of a repeated hour get the same features and calls. A skipped hour (spring) is missing: its
+price features are NaN and the baselines call it "not zero".
 """
 
 from __future__ import annotations
@@ -57,19 +66,6 @@ PRICE = [
     "zero_hours_7d",
     "days_since_zero",
 ]
-REE = [
-    "r_wind_h",
-    "r_solar_h",
-    "r_demand_h",
-    "r_share_h",
-    "r_wind_day",
-    "r_solar_day",
-    "r_demand_day",
-    "r_hydro_day",
-    "r_nuclear_day",
-    "r_wind_7d",
-    "r_hydro_7d",
-]
 WEATHER = [
     "wx_rad",
     "wx_wind",
@@ -83,9 +79,8 @@ WEATHER = [
     "wx_rad_day_d1",
     "wx_wind_day_d1",
 ]
-FEATURES = CALENDAR + PRICE + REE + WEATHER
-FEATURES_NO_WEATHER = CALENDAR + PRICE + REE
-_REE_COLS = ["wind", "solar", "demand", "renewables_share", "hydro_gen", "nuclear"]
+FEATURES = CALENDAR + PRICE + WEATHER
+FEATURES_NO_WEATHER = CALENDAR + PRICE
 _WX_COLS = ["wx_rad", "wx_wind", "wx_wind3", "wx_temp"]
 
 SEASONS = {
@@ -121,7 +116,6 @@ class Cutoff:
     origin: dt.date
     target: dt.date
     prices_before: pd.Timestamp
-    ree_before: pd.Timestamp
     weather_before: pd.Timestamp
     weather_lead: str
 
@@ -134,7 +128,6 @@ def available_at(origin: dt.date) -> Cutoff:
     """The information cut-off for a forecast made on day ``origin`` (D) for D+2.
 
     - Prices: everything delivered before 00:00 on D+2, i.e. through the end of D+1.
-    - REE generation and demand: everything before 00:00 on D, i.e. through the end of D-1.
     - Weather: forecasts for hours before 00:00 on D+3 (the target day and earlier), and only
       the ``previous_day3`` fields, issued 72 hours before each hour.
     """
@@ -143,7 +136,6 @@ def available_at(origin: dt.date) -> Cutoff:
         origin=origin,
         target=origin + HORIZON_DAYS * day,
         prices_before=_midnight(origin + 2 * day),
-        ree_before=_midnight(origin),
         weather_before=_midnight(origin + 3 * day),
         weather_lead=weather.LEAD,
     )
@@ -153,7 +145,6 @@ def available_at(origin: dt.date) -> Cutoff:
 class Inputs:
     cutoff: Cutoff
     prices: pd.DataFrame
-    ree: pd.DataFrame
     weather: pd.DataFrame | None
 
 
@@ -165,23 +156,19 @@ def _local(frame: pd.DataFrame) -> pd.DataFrame:
 def select_inputs(hourly: pd.DataFrame, wx: pd.DataFrame | None, origin: dt.date) -> Inputs:
     """Cut ``hourly`` and the aggregated weather ``wx`` at :func:`available_at` ``(origin)``.
 
-    Every feature is computed from the returned frames only. REE values in blackout hours
-    (``grid_event``) are blanked, since measured demand collapsed.
+    Every feature is computed from the returned frames only. No REE column is returned.
     """
     cut = available_at(origin)
     since = _midnight(cut.target - dt.timedelta(days=HISTORY_DAYS))
     ts = hourly["ts_utc"]
     prices = hourly.loc[(ts >= since) & (ts < cut.prices_before), ["ts_utc", "price_es"]]
-    ree = hourly.loc[(ts >= since) & (ts < cut.ree_before), ["ts_utc", *_REE_COLS]].copy()
-    if "grid_event" in hourly:
-        ree.loc[hourly.loc[ree.index, "grid_event"].to_numpy(dtype=bool), _REE_COLS] = np.nan
     wxc = None
     if wx is not None:
         bad = [c for c in wx.columns if c != "ts_utc" and c not in _WX_COLS]
         if bad:
             raise ValueError(f"unexpected weather columns: {bad}")
         wxc = _local(wx.loc[(wx["ts_utc"] >= since) & (wx["ts_utc"] < cut.weather_before)])
-    return Inputs(cut, _local(prices), _local(ree), wxc)
+    return Inputs(cut, _local(prices), wxc)
 
 
 # ---- features --------------------------------------------------------------------------
@@ -199,6 +186,24 @@ def _matrix(frame: pd.DataFrame, col: str, days: list[str]) -> pd.DataFrame:
     """Day x hour-of-day table of ``col`` (a repeated DST hour is averaged, a skipped one NaN)."""
     m = frame.groupby(["date", "hour"])[col].mean().unstack("hour")
     return m.reindex(index=days, columns=range(24)).astype("float64")
+
+
+def _zero_matrix(frame: pd.DataFrame, days: list[str]) -> pd.DataFrame:
+    """Day x hour-of-day zero indicator from the original delivery hours.
+
+    A repeated DST hour is zero if any of its delivery hours was at or below zero; a skipped
+    or missing hour is NaN.
+    """
+    z = frame.assign(z=(frame["price_es"] <= 0).astype("float64"))
+    m = z.groupby(["date", "hour"])["z"].max().unstack("hour")
+    return m.reindex(index=days, columns=range(24)).astype("float64")
+
+
+def _daily_zero_hours(frame: pd.DataFrame, days: list[str]) -> pd.Series:
+    """Zero delivery hours per day, summed over the original rows (a fold counts twice); NaN
+    for a day without prices."""
+    z = (frame["price_es"] <= 0).astype("float64")
+    return z.groupby(frame["date"]).sum().reindex(days)
 
 
 def _mean(values) -> float:
@@ -234,11 +239,11 @@ def build_features(hourly: pd.DataFrame, wx: pd.DataFrame | None, origin: dt.dat
 
     # Prices through D+1 (= target - 1).
     p = _matrix(inp.prices, "price_es", days)
-    zero = p.le(0).astype("float64").where(p.notna())
+    zero = _zero_matrix(inp.prices, days)
     for k in (1, 2, 3, 7):
         out[f"p_d{k}"] = back(p, k)[h]
     d1 = back(p, 1)
-    daily_zero = zero.sum(axis=1).where(p.notna().any(axis=1))
+    daily_zero = _daily_zero_hours(inp.prices, days)
     out["d1_zero_hours"] = daily_zero.iloc[-2]
     out["d1_min"] = np.nanmin(d1) if np.isfinite(d1).any() else np.nan
     out["d1_mean"] = _mean(d1)
@@ -249,28 +254,8 @@ def build_features(hourly: pd.DataFrame, wx: pd.DataFrame | None, origin: dt.dat
     out["zero_hours_7d"] = daily_zero.iloc[-8:-1].mean()
     hit = np.flatnonzero(daily_zero.iloc[:-1].to_numpy()[::-1] > 0)
     out["days_since_zero"] = float(hit[0] + 1) if len(hit) else float(HISTORY_DAYS + 1)
-    out["base_d1"] = out["p_d1"] <= 0
-    out["base_week"] = out["p_d7"] <= 0
-
-    # REE generation and demand through D-1 (= target - 3).
-    r = {c: _matrix(inp.ree, c, days) for c in _REE_COLS}
-    for name, col in [
-        ("wind", "wind"),
-        ("solar", "solar"),
-        ("demand", "demand"),
-        ("share", "renewables_share"),
-    ]:
-        out[f"r_{name}_h"] = back(r[col], 3)[h]
-    for name, col in [
-        ("wind", "wind"),
-        ("solar", "solar"),
-        ("demand", "demand"),
-        ("hydro", "hydro_gen"),
-        ("nuclear", "nuclear"),
-    ]:
-        out[f"r_{name}_day"] = _mean(back(r[col], 3))
-    out["r_wind_7d"] = _mean(r["wind"].iloc[-10:-3].to_numpy())
-    out["r_hydro_7d"] = _mean(r["hydro_gen"].iloc[-10:-3].to_numpy())
+    out["base_d1"] = back(zero, 1)[h] == 1
+    out["base_week"] = back(zero, 7)[h] == 1
 
     # Weather forecasts for the target day and the day before, both issued 72 hours ahead.
     if inp.weather is None:
@@ -603,7 +588,13 @@ def backtest(
         )
     if not out:
         raise ValueError(f"no forecast origin has {min_train_days} days of training data")
-    return add_predictions(pd.concat(out, ignore_index=True))
+    result = add_predictions(pd.concat(out, ignore_index=True))
+    result.attrs["config"] = {
+        "min_train_days": int(min_train_days),
+        "retrain_every_days": int(retrain_every),
+        "seed": int(seed),
+    }
+    return result
 
 
 def add_predictions(bt: pd.DataFrame) -> pd.DataFrame:
@@ -758,6 +749,9 @@ def _round(obj, digits: int = 4):
 
 def summarise(bt: pd.DataFrame, table: pd.DataFrame, hourly: pd.DataFrame) -> dict:
     """Everything the site, the case study and the notebook show, as a JSON-ready dict."""
+    config = bt.attrs.get("config")
+    if not config:
+        raise ValueError("backtest settings missing: pass the frame returned by backtest()")
     month = pd.to_datetime(bt["date"]).dt.month
 
     def block(rows: pd.DataFrame) -> dict:
@@ -778,13 +772,13 @@ def summarise(bt: pd.DataFrame, table: pd.DataFrame, hourly: pd.DataFrame) -> di
                 "target_days": int(bt["date"].nunique()),
                 "hours": int(len(bt)),
                 "zero_hours": int(bt["y"].sum()),
-                "min_train_days": MIN_TRAIN_DAYS,
-                "retrain_every_days": RETRAIN_EVERY_DAYS,
+                "min_train_days": config["min_train_days"],
+                "retrain_every_days": config["retrain_every_days"],
                 "retrains": int(bt["trained_through"].nunique()),
-                "seed": SEED,
+                "seed": config["seed"],
                 "model": "sklearn HistGradientBoostingClassifier",
                 "model_params": {
-                    k: make_model().get_params()[k]
+                    k: make_model(config["seed"]).get_params()[k]
                     for k in [
                         "max_iter",
                         "learning_rate",
@@ -793,7 +787,7 @@ def summarise(bt: pd.DataFrame, table: pd.DataFrame, hourly: pd.DataFrame) -> di
                         "l2_regularization",
                     ]
                 },
-                "features": {"calendar": CALENDAR, "prices": PRICE, "ree": REE, "weather": WEATHER},
+                "features": {"calendar": CALENDAR, "prices": PRICE, "weather": WEATHER},
                 "weather_lead": weather.LEAD,
                 "weather_points": list(weather.POINTS),
                 "weather_attribution": weather.ATTRIBUTION,

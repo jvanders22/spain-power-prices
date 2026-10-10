@@ -35,7 +35,6 @@ def test_available_at_limits():
     cut = forecast.available_at(ORIGIN)
     assert cut.target == dt.date(2025, 1, 17)
     assert cut.prices_before == _ts("2025-01-17 00:00")  # prices through the end of D+1
-    assert cut.ree_before == _ts("2025-01-15 00:00")  # REE through the end of D-1
     assert cut.weather_before == _ts("2025-01-18 00:00")  # forecasts for the target day
     assert cut.weather_lead == "previous_day3"
 
@@ -44,10 +43,9 @@ def test_selected_inputs_end_at_the_cutoff(forecast_frames):
     hourly, wx = forecast_frames
     inp = forecast.select_inputs(hourly, wx, ORIGIN)
     assert inp.prices["ts_utc"].max() == _ts("2025-01-16 23:00")
-    assert inp.ree["ts_utc"].max() == _ts("2025-01-14 23:00")
     assert inp.weather["ts_utc"].max() == _ts("2025-01-17 23:00")
     assert set(inp.prices.columns) == {"ts_utc", "price_es", "date", "hour"}
-    assert "price_es" not in inp.ree.columns
+    assert not hasattr(inp, "ree")
 
 
 def test_features_do_not_change_when_later_data_changes(forecast_frames):
@@ -60,14 +58,11 @@ def test_features_do_not_change_when_later_data_changes(forecast_frames):
     h = hourly.copy()
     late_price = (h["ts_utc"] >= cut.prices_before).to_numpy()
     h.loc[late_price, "price_es"] = rng.uniform(-500, 500, late_price.sum())
-    late_ree = (h["ts_utc"] >= cut.ree_before).to_numpy()
-    for col in ["wind", "solar", "demand", "renewables_share", "hydro_gen", "nuclear", "solar_pv", "hydro"]:
-        h.loc[late_ree, col] = rng.uniform(0, 1e5, late_ree.sum())
     w = wx.copy()
     late_wx = (w["ts_utc"] >= cut.weather_before).to_numpy()
     for col in ["wx_rad", "wx_wind", "wx_wind3", "wx_temp"]:
         w.loc[late_wx, col] = rng.uniform(0, 1e3, late_wx.sum())
-    assert late_price.sum() > 1000 and late_ree.sum() > late_price.sum() and late_wx.sum() > 1000
+    assert late_price.sum() > 1000 and late_wx.sum() > 1000
 
     pd.testing.assert_frame_equal(forecast.build_features(h, w, ORIGIN), want)
     # Dropping the later rows altogether gives the same features too.
@@ -85,22 +80,35 @@ def test_features_do_change_when_the_last_allowed_data_changes(forecast_frames):
     assert got["p_d1"].iloc[23] == -99.0 and got["d1_min"].iloc[0] == -99.0
     assert bool(got["base_d1"].iloc[23]) and not want["base_d1"].iloc[23]
 
-    h = hourly.copy()
-    h.loc[h["ts_utc"] == _ts("2025-01-14 23:00"), "wind"] = 123456.0
-    assert forecast.build_features(h, wx, ORIGIN)["r_wind_h"].iloc[23] == 123456.0
-
     w = wx.copy()
     w.loc[w["ts_utc"] == _ts("2025-01-17 23:00"), "wx_rad"] = 777.0
     assert forecast.build_features(hourly, w, ORIGIN)["wx_rad"].iloc[23] == 777.0
 
 
-def test_ree_of_day_d_is_not_used_although_its_prices_are(forecast_frames):
+REE_COLUMNS = [
+    "wind",
+    "solar",
+    "solar_pv",
+    "demand",
+    "renewables_share",
+    "hydro",
+    "hydro_gen",
+    "nuclear",
+]
+
+
+def test_no_feature_reads_ree_data_at_any_date(forecast_frames):
+    """REE values are revised after the fact, so they must not reach any feature, even history."""
     hourly, wx = forecast_frames
     want = forecast.build_features(hourly, wx, ORIGIN)
+    rng = np.random.default_rng(3)
     h = hourly.copy()
-    day_d = (h["date"] == "2025-01-15").to_numpy()
-    h.loc[day_d, ["wind", "solar", "demand", "renewables_share", "hydro_gen", "nuclear"]] = 9e9
+    for col in [c for c in REE_COLUMNS if c in h]:
+        h[col] = rng.uniform(0, 1e5, len(h))
+    h["grid_event"] = True
     pd.testing.assert_frame_equal(forecast.build_features(h, wx, ORIGIN), want)
+    assert not any(f.startswith("r_") for f in forecast.FEATURES)
+    day_d = (h["date"] == "2025-01-15").to_numpy()
     h.loc[day_d, "price_es"] = -1.0
     assert (forecast.build_features(h, wx, ORIGIN)["p_d2"] == -1.0).all()
 
@@ -127,12 +135,37 @@ def test_feature_rows_and_columns(forecast_frames):
     pd.testing.assert_frame_equal(no_wx[forecast.FEATURES_NO_WEATHER], rows[forecast.FEATURES_NO_WEATHER])
 
 
-def test_blackout_hours_are_blanked_in_ree_inputs(forecast_frames):
-    hourly, _ = forecast_frames
-    h = hourly.assign(grid_event=(hourly["date"] == "2025-01-14") & (hourly["hour"] >= 12))
-    ree = forecast.select_inputs(h, None, ORIGIN).ree
-    event = (ree["date"] == "2025-01-14") & (ree["hour"] >= 12)
-    assert ree.loc[event, "wind"].isna().all() and ree.loc[~event, "wind"].notna().all()
+def _flat_prices(start: str, end: str) -> pd.DataFrame:
+    ts = pd.date_range(start, end, freq="h", tz=TZ, inclusive="left")
+    return pd.DataFrame({"ts_utc": ts.tz_convert("UTC"), "price_es": 50.0})
+
+
+def test_autumn_fold_counts_any_zero_delivery_hour():
+    """A repeated 02:00 with prices [-10, 20] on D+1 is a zero hour for the counts and baseline."""
+    h = _flat_prices("2025-10-19", "2025-11-04")
+    local = h["ts_utc"].dt.tz_convert(TZ)
+    fold = ((local.dt.strftime("%Y-%m-%d") == "2025-10-26") & (local.dt.hour == 2)).to_numpy()
+    assert fold.sum() == 2
+    h.loc[fold, "price_es"] = [-10.0, 20.0]
+    rows = forecast.build_features(h, None, dt.date(2025, 10, 25))  # target 27 Oct, D+1 26 Oct
+    at2 = rows[rows["hour"] == 2].iloc[0]
+    assert at2["d1_zero_hours"] == 1 and bool(at2["base_d1"]) and at2["p_d1"] == 5.0
+    assert rows.loc[rows["hour"] != 2, "base_d1"].eq(False).all()
+    # The fold as target day: 25 rows, the repeated hour gets identical features.
+    target = forecast.build_features(h, None, dt.date(2025, 10, 24))
+    assert len(target) == 25
+    twice = target[target["hour"] == 2].drop(columns="ts_utc")
+    assert len(twice) == 2 and twice.iloc[0].equals(twice.iloc[1])
+
+
+def test_spring_skipped_hour_is_missing_not_zero():
+    h = _flat_prices("2025-03-20", "2025-04-06")
+    h.loc[h["ts_utc"].dt.tz_convert(TZ).dt.strftime("%Y-%m-%d") == "2025-03-30", "price_es"] = -5.0
+    rows = forecast.build_features(h, None, dt.date(2025, 3, 29))  # D+1 is the 23-hour day
+    at2 = rows[rows["hour"] == 2].iloc[0]
+    assert np.isnan(at2["p_d1"]) and not at2["base_d1"]
+    assert rows["d1_zero_hours"].eq(23).all()
+    assert rows.loc[rows["hour"] != 2, "base_d1"].all()
 
 
 def test_target_hours_on_dst_days():
@@ -320,6 +353,14 @@ def test_summarise_matches_the_results_fixture(bt, table, forecast_frames, forec
     """The small results fixture the site tests render is what ``summarise`` produces."""
     hourly, _ = forecast_frames
     got = forecast.summarise(bt, table, hourly)
+    # The metadata reports the settings of this run, not the module defaults.
+    assert (got["meta"]["min_train_days"], got["meta"]["retrain_every_days"]) == (60, 30)
+    assert got["meta"]["seed"] == forecast.SEED
+    assert "ree" not in got["meta"]["features"]
+    bare = bt.copy()
+    bare.attrs = {}
+    with pytest.raises(ValueError, match="backtest settings"):
+        forecast.summarise(bare, table, hourly)
     assert set(got) == set(forecast_results)
     assert set(got["overall"]) == set(forecast.METHODS) == set(got["labels"])
     assert set(got["by_season"]) == set(forecast.SEASONS)
