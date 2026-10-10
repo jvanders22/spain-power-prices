@@ -5,7 +5,7 @@
 Spain keeps adding solar, and the day-ahead market shows it: midday prices sink while evening
 prices hold. I wanted to measure that with public data: how does the price move as renewables
 cover more of demand, when do zero and negative prices happen, and how far below the average
-price does solar actually sell?
+price does solar's output clear?
 
 ## Data
 
@@ -25,8 +25,10 @@ price does solar actually sell?
 - **Calibration to REData.** The real-time feed changed method in December 2025, which
   shifted solar and demand levels overnight. Each day's hourly series is scaled so its daily
   total matches the official REData figure; 738 of 739 days are calibrated.
-- **Capture rate.** Capture price = Σ(price × generation) / Σ(generation). Capture rate =
-  capture price / simple average (baseload) price.
+- **Capture rate.** Capture price = Σ(price × generation) / Σ(generation), and capture rate =
+  capture price / simple average (baseload) price. These are generation-weighted hourly
+  capture prices (an estimate): since the market moved to 15-minute periods, price and
+  output moves within an hour are averaged away.
 - **Blackout exclusion.** The afternoon of 28 Apr 2025 (the Iberian blackout,
   12 hours) is left out of every share calculation because measured demand
   collapsed. Its prices stay in, since they were set the day before.

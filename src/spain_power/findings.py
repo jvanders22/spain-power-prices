@@ -12,6 +12,27 @@ WINDOWS = {
 }
 
 
+def window_gaps(df: pd.DataFrame, start: str, end: str) -> list[str]:
+    """What a ``[start, end]`` window lacks to be complete: missing days and short months.
+
+    A month is short when it has fewer rows than its clock hours minus one, the same
+    tolerance ``headline`` uses for complete months. Blackout hours are rows like any other
+    (only their shares are undefined), so they do not count as gaps.
+    """
+    g = t.filter_dates(df, start, end)
+    hours = g.groupby("date").size()
+    days = pd.date_range(start, end).strftime("%Y-%m-%d")
+    missing = [d for d in days if d not in hours.index]
+    gaps = []
+    if missing:
+        gaps.append(f"{len(missing)} of {len(days)} days missing (first {missing[0]}, last {missing[-1]})")
+    want = pd.Series([t.expected_hours(d) for d in days], index=days)
+    month = days.str[:7]
+    short = want.groupby(month).sum() - 1 - hours.reindex(days, fill_value=0).groupby(month).sum()
+    gaps += [f"{m} is {int(n) + 1} hours short" for m, n in short.items() if n > 0]
+    return gaps
+
+
 def window_table(df: pd.DataFrame) -> pd.DataFrame:
     rows = {}
     for name, (a, b) in WINDOWS.items():

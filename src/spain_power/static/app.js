@@ -3,12 +3,13 @@
 
    D is the embedded hourly table, column-wise and sorted by time:
    dates[] (local days), di[] (row -> index into dates), hour[], price[] (EUR/MWh),
-   demand[], solar[], wind[], ren[] (MW) and ev[] (1 = grid-event hour, excluded from shares). */
+   demand[], solar[], wind[], ren[] (MW), ev[] (1 = grid-event hour, excluded from shares),
+   share[] (hourly renewables share from Python, null where undefined) and bucket[] (its
+   transform.share_bucket index, -1 for none). */
 (function (root) {
   "use strict";
 
   var STEP = 0.1;
-  var SHARE_CAP = 1.5;
   var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
   function prepare(raw) {
@@ -30,10 +31,9 @@
     return [i0, i1];
   }
 
-  // transform.build_hourly: renewables / demand, capped, undefined for grid-event hours.
+  // transform.build_hourly's renewables_share, as computed in Python.
   function share(D, i) {
-    if (D.ev[i] || !(D.demand[i] > 0)) return NaN;
-    return Math.min(D.ren[i] / D.demand[i], SHARE_CAP);
+    return D.share[i] === null ? NaN : D.share[i];
   }
 
   // transform.kpis, with the app's threshold count in place of the fixed <= 0 one.
@@ -64,21 +64,19 @@
     };
   }
 
-  // transform.share_buckets: mean price per 10% renewables-share bucket, [left, right).
+  // transform.share_buckets: mean price per 10% renewables-share bucket. Each hour's bucket
+  // is assigned in Python (pd.cut on the unrounded share), so the boundary rule is Python's.
   function buckets(D, i0, i1) {
-    var nb = Math.round(SHARE_CAP / STEP);
-    var sum = new Array(nb).fill(0);
-    var cnt = new Array(nb).fill(0);
+    var sum = [];
+    var cnt = [];
     for (var i = i0; i < i1; i++) {
-      var s = share(D, i);
-      if (!(s >= 0)) continue;
-      var b = Math.floor(s / STEP + 1e-9);
-      if (b >= nb) continue;
-      sum[b] += D.price[i];
-      cnt[b]++;
+      var b = D.bucket[i];
+      if (b < 0) continue;
+      sum[b] = (sum[b] || 0) + D.price[i];
+      cnt[b] = (cnt[b] || 0) + 1;
     }
     var out = [];
-    for (var k = 0; k < nb; k++) {
+    for (var k = 0; k < cnt.length; k++) {
       if (!cnt[k]) continue;
       out.push({
         label: k * 10 + "%-" + (k + 1) * 10 + "%",
@@ -115,6 +113,20 @@
       return row;
     });
     return { months: g.months, z: z };
+  }
+
+  // The n month x hour cells with the most hours, for the heatmap's text summary.
+  function topCells(hm, n) {
+    var cells = [];
+    hm.z.forEach(function (row, m) {
+      row.forEach(function (count, h) {
+        if (count) cells.push({ month: hm.months[m], hour: h, count: count });
+      });
+    });
+    cells.sort(function (a, b) {
+      return b.count - a.count || (a.month < b.month ? -1 : a.month > b.month ? 1 : a.hour - b.hour);
+    });
+    return cells.slice(0, n);
   }
 
   // transform.capture_prices: monthly baseload and generation-weighted solar / wind prices.
@@ -217,6 +229,7 @@
     kpis: kpis,
     buckets: buckets,
     heatmap: heatmap,
+    topCells: topCells,
     capture: capture,
     profile: profile,
     lastYearStart: lastYearStart,
@@ -245,6 +258,34 @@
 
   function pct(x, digits) {
     return isFinite(x) ? num(x * 100, digits) + "%" : "–";
+  }
+
+  // Fill a chart's text summary: an optional sentence, then a table (cells set as text).
+  function summarise(key, note, head, rows) {
+    var box = $("summary-" + key);
+    box.textContent = "";
+    if (note) {
+      var p = document.createElement("p");
+      p.textContent = note;
+      box.appendChild(p);
+    }
+    if (!rows.length) return;
+    var table = document.createElement("table");
+    var tr = table.createTHead().insertRow();
+    head.forEach(function (h) {
+      var th = document.createElement("th");
+      th.scope = "col";
+      th.textContent = h;
+      tr.appendChild(th);
+    });
+    var body = table.createTBody();
+    rows.forEach(function (r) {
+      var row = body.insertRow();
+      r.forEach(function (v) {
+        row.insertCell().textContent = v;
+      });
+    });
+    box.appendChild(table);
   }
 
   function hasWebGL() {
@@ -298,6 +339,12 @@
         line.customdata = b.map(function (r) { return [r.label, r.count]; });
         traces.push(line);
       }
+      summarise(
+        "scatter",
+        "Mean day-ahead price per 10-point bucket of renewables share, for the selected dates.",
+        ["Renewables share", "Mean price (EUR/MWh)", "Hours"],
+        b.map(function (r) { return [r.label, num(r.mean, 1), num(r.count, 0)]; })
+      );
       Plotly.react("chart-scatter", traces, layout("scatter", { height: 480 }), CONFIG);
     }
 
@@ -309,6 +356,17 @@
       trace.y = hm.months;
       $("title-heatmap").textContent = "Hours with day-ahead price ≤ " + threshold + " EUR/MWh";
       var height = Math.max(300, 110 + 20 * hm.months.length);
+      var total = 0;
+      hm.z.forEach(function (row) {
+        row.forEach(function (c) { total += c; });
+      });
+      summarise(
+        "heatmap",
+        num(total, 0) + " hours at or below " + threshold + " EUR/MWh in the selected dates. " +
+          "The five month and hour-of-day cells with the most such hours:",
+        ["Month", "Hour of day", "Hours"],
+        topCells(hm, 5).map(function (c) { return [c.month, c.hour + ":00", num(c.count, 0)]; })
+      );
       Plotly.react("chart-heatmap", [trace], layout("heatmap", { height: height }), CONFIG);
     }
 
@@ -320,11 +378,38 @@
         t.y = c[key];
         return t;
       });
+      summarise(
+        "capture",
+        "Monthly baseload price and generation-weighted hourly capture prices (an estimate), EUR/MWh.",
+        ["Month", "Baseload", "Solar capture", "Wind capture", "Solar capture rate"],
+        c.months.map(function (m, k) {
+          var s = c.solar_capture[k];
+          var w = c.wind_capture[k];
+          var rate = s === null || !c.baseload[k] ? NaN : s / c.baseload[k];
+          return [m, num(c.baseload[k], 1), s === null ? "–" : num(s, 1), w === null ? "–" : num(w, 1),
+            pct(rate, 0)];
+        })
+      );
       Plotly.react("chart-capture", traces, layout("capture", { height: 440 }), CONFIG);
     }
 
     function drawProfile(i0, i1) {
-      var traces = profile(D, i0, i1).map(function (w, k) {
+      var windows = profile(D, i0, i1);
+      var hours = Array.from({ length: 24 }, function (_, h) { return h; });
+      summarise(
+        "profile",
+        "Average day-ahead price by hour of day (Europe/Madrid), EUR/MWh, per 12-month window.",
+        ["Hour of day"].concat(windows.map(function (w) { return w.label; })),
+        hours.map(function (h) {
+          return [h + ":00"].concat(
+            windows.map(function (w) {
+              var k = w.hours.indexOf(h);
+              return k < 0 ? "–" : num(w.mean[k], 1);
+            })
+          );
+        })
+      );
+      var traces = windows.map(function (w, k) {
         var t = clone(figs.profile.data[0]);
         var color = site.series[k % site.series.length];
         t.name = w.label;

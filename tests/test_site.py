@@ -11,12 +11,13 @@ import pytest
 from conftest import synthetic_inputs
 
 from spain_power import site, transform
+from spain_power.cache import PROCESSED, load_hourly
 from spain_power.transform import build_hourly
 
 PAGES = ["index.html", "case-study.html", "wholesale-vs-bill.html"]
 
-# Prints the page's KPIs for [start, end, threshold] argument triples, using the built files.
-NODE_KPIS = """
+# Loads the built page's data and JS; BODY prints JSON for [start, end, threshold] triples.
+NODE = """
 const fs = require("fs"), path = require("path");
 const [dir, ...args] = process.argv.slice(1);
 const html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
@@ -26,16 +27,55 @@ const D = sp.prepare(JSON.parse(blob).data);
 const out = [];
 for (let i = 0; i < args.length; i += 3) {
   const [i0, i1] = sp.range(D, args[i], args[i + 1]);
-  out.push(sp.kpis(D, i0, i1, Number(args[i + 2])));
+  const threshold = Number(args[i + 2]);
+  out.push(BODY);
 }
 console.log(JSON.stringify(out));
 """
+NODE_KPIS = NODE.replace("BODY", "sp.kpis(D, i0, i1, threshold)")
+NODE_CHARTS = NODE.replace(
+    "BODY",
+    """{
+    buckets: sp.buckets(D, i0, i1),
+    heatmap: sp.heatmap(D, i0, i1, threshold),
+    top: sp.topCells(sp.heatmap(D, i0, i1, threshold), 5),
+    capture: sp.capture(D, i0, i1),
+  }""",
+)
+
+
+def _node(script: str, out, cases) -> list:
+    args = [str(a) for case in cases for a in case]
+    run = subprocess.run(
+        ["node", "-e", script, str(out), *args], capture_output=True, text=True, check=True, timeout=120
+    )
+    return json.loads(run.stdout)
+
+
+def _assert_charts_match_python(df, threshold: float, js: dict) -> None:
+    """Bucket means, heatmap counts and monthly capture prices from the page's JS vs transform."""
+    b = transform.share_buckets(df)
+    assert [r["label"] for r in js["buckets"]] == list(b.index)
+    assert [r["count"] for r in js["buckets"]] == b["count"].tolist()
+    assert [r["mean"] for r in js["buckets"]] == pytest.approx(b["mean"].tolist(), abs=1e-3)
+
+    h = transform.negative_hours(df, threshold).reindex(columns=range(24), fill_value=0)
+    assert js["heatmap"]["months"] == list(h.index)
+    assert js["heatmap"]["z"] == h.to_numpy().tolist()
+    cells = h.stack()
+    best = sorted(cells[cells > 0].items(), key=lambda kv: (-kv[1], kv[0]))[:5]
+    assert [(c["month"], c["hour"], c["count"]) for c in js["top"]] == [(m, hr, n) for (m, hr), n in best]
+
+    c = transform.capture_prices(df)
+    assert js["capture"]["months"] == list(c.index)
+    for col in ["baseload", "solar_capture", "wind_capture"]:
+        assert js["capture"][col] == pytest.approx(c[col].tolist(), abs=0.01), col
 
 
 @pytest.fixture(scope="module")
 def frame():
-    # Spans both comparison windows in findings.WINDOWS, which the case study needs.
-    return build_hourly(*synthetic_inputs("2024-10-01", "2025-11-30 23:00"))
+    # Covers both comparison windows in findings.WINDOWS in full, which the case study needs.
+    return build_hourly(*synthetic_inputs("2024-10-01", "2026-10-09 23:00"))
 
 
 @pytest.fixture(scope="module")
@@ -73,15 +113,16 @@ def test_pages_are_self_contained(built):
         for href in ["index.html", "case-study.html", "wholesale-vs-bill.html", site.REPO_URL]:
             assert f'href="{href}"' in html, (name, href)
         assert site.ATTRIBUTION in html
-        assert "Data through 30 Nov 2025" in html
+        assert "Data through 9 Oct 2026" in html
 
 
 def test_embedded_data_parses_and_matches_frame(built, frame):
     blob = _blob(built)
     data = blob["data"]
     n = len(frame)
-    assert all(len(data[k]) == n for k in ["di", "hour", "price", "demand", "solar", "wind", "ren"])
-    assert data["dates"][0] == "2024-10-01" and data["dates"][-1] == "2025-11-30"
+    columns = ["di", "hour", "price", "demand", "solar", "wind", "ren", "share", "bucket"]
+    assert all(len(data[k]) == n for k in columns)
+    assert data["dates"][0] == "2024-10-01" and data["dates"][-1] == "2026-10-09"
     assert [data["dates"][i] for i in data["di"][:25:24]] == ["2024-10-01", "2024-10-02"]
     assert data["price"] == pytest.approx(frame["price_es"].tolist(), abs=1e-4)
     assert set(blob["figs"]) == {"scatter", "heatmap", "capture", "profile"}
@@ -94,6 +135,21 @@ def test_grid_event_hours_are_flagged(frame):
     ev = site.payload(frame)["ev"]
     assert len(ev) == 12  # the blackout afternoon, 28 Apr 2025 12:00-23:59
     assert ev == frame.index[frame["grid_event"]].tolist()
+
+
+def test_buckets_come_from_the_unrounded_share(frame):
+    # 0.29996 and 0.30004 both round to 0.3 at 4 dp but sit either side of the 30% edge.
+    df = frame.head(6).copy()
+    df["renewables_share"] = [0.29996, 0.30004, 0.0, 1.49999, 1.5, float("nan")]
+    data = site.payload(df)
+    assert data["share"] == [0.3, 0.3, 0.0, 1.5, 1.5, None]
+    assert data["bucket"] == [2, 3, 0, 14, -1, -1]
+    assert transform.share_buckets(df)["count"].to_dict() == {
+        "0%-10%": 1,
+        "20%-30%": 1,
+        "30%-40%": 1,
+        "140%-150%": 1,
+    }
 
 
 def test_expected_kpis_are_embedded(built, frame):
@@ -121,6 +177,23 @@ def test_case_study_and_wholesale_pages(built):
     assert "97.553" in wb and "BOE-A-2025-26348" in wb and "BOE-A-2025-26705" in wb
     assert "spain-negative-price-alert/blob/main/docs/tariffs.md" in wb
     assert "illustration" in wb
+    assert "https://www.boe.es/diario_boe/txt.php?id=BOE-A-2025-26348" in wb
+    assert "https://www.boe.es/diario_boe/txt.php?id=BOE-A-2025-26705" in wb
+    assert "https://www.boe.es/buscar/act.php?id=BOE-A-2020-1066" in wb
+    assert "https://www.boe.es/eli/es/rd/2023/06/13/446" in wb and "55%" in wb
+
+
+def test_capture_wording_and_chart_summaries(built):
+    html = (built / "index.html").read_text(encoding="utf-8")
+    assert "Generation-weighted hourly capture prices (an estimate)" in html
+    assert "15-minute periods" in html
+    for key in ["scatter", "heatmap", "capture", "profile"]:
+        assert (
+            f'<details><summary>Data summary (text)</summary><div class="table-wrap" id="summary-{key}">'
+            in html
+        )
+    for name in PAGES:
+        assert "actually sell" not in (built / name).read_text(encoding="utf-8"), name
 
 
 def test_md_to_html_subset():
@@ -135,12 +208,9 @@ def test_md_to_html_subset():
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
 def test_page_kpis_match_python(built, frame):
     """The page's JS, run on the embedded (rounded) data, reproduces transform.kpis."""
-    cases = [("2024-10-01", "2025-11-30", 0.0), ("2025-01-15", "2025-06-30", 25.0)]
-    args = [str(a) for case in cases for a in case]
-    run = subprocess.run(
-        ["node", "-e", NODE_KPIS, str(built), *args], capture_output=True, text=True, check=True, timeout=60
-    )
-    for (start, end, threshold), js in zip(cases, json.loads(run.stdout), strict=True):
+    cases = [("2024-10-01", "2026-10-09", 0.0), ("2025-01-15", "2025-06-30", 25.0)]
+    out = _node(NODE_KPIS, built, cases)
+    for (start, end, threshold), js in zip(cases, out, strict=True):
         df = transform.filter_dates(frame, start, end)
         py = transform.kpis(df)
         low = int((df["price_es"] <= threshold).sum())
@@ -153,7 +223,26 @@ def test_page_kpis_match_python(built, frame):
         assert js["solar_capture_rate"] * 100 == pytest.approx(py["solar_capture_rate"] * 100, abs=0.1)
     # Full range at threshold 0 is what the page shows on load: it must equal data-expected.
     want = site.expected_kpis(frame)
-    js = json.loads(run.stdout)[0]
+    js = out[0]
     assert js["low_hours"] == want["low"]
     assert js["avg_price"] == pytest.approx(want["avg"], abs=0.1)
     assert js["renewables_share"] * 100 == pytest.approx(want["ren"], abs=0.1)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_page_charts_match_python(built, frame):
+    """Bucket means, heatmap counts and capture prices: full range and a filtered one."""
+    cases = [("2024-10-01", "2026-10-09", 0.0), ("2025-01-15", "2025-06-30", 25.0)]
+    for (start, end, threshold), js in zip(cases, _node(NODE_CHARTS, built, cases), strict=True):
+        _assert_charts_match_python(transform.filter_dates(frame, start, end), threshold, js)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+@pytest.mark.skipif(not PROCESSED.exists(), reason="no data/processed/hourly.parquet")
+def test_page_charts_match_python_on_repo_data(tmp_path):
+    """The same comparison on the committed hourly table, whose shares do sit near bucket edges."""
+    df = load_hourly(PROCESSED)
+    site.build(df, tmp_path)
+    cases = [(df["date"].min(), df["date"].max(), 0.0), ("2025-03-01", "2026-02-28", 10.0)]
+    for (start, end, threshold), js in zip(cases, _node(NODE_CHARTS, tmp_path, cases), strict=True):
+        _assert_charts_match_python(transform.filter_dates(df, start, end), threshold, js)

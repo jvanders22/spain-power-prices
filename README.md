@@ -39,7 +39,7 @@ Oct–Sep years, so both cover a full seasonal cycle. All numbers are computed i
    (9.7%) cleared at or below zero, and **91%** of them fell between 10:00 and 17:59. The
    peak was May 2025, with 269 such hours. Negative prices stay shallow: the lowest hourly
    average was −15 EUR/MWh.
-3. **Solar is cannibalising its own price.** Solar sold at **53%** of the baseload price
+3. **Solar is cannibalising its own price.** Solar's capture price was **53%** of baseload
    in the latest year, down from 56%, while its share of demand rose from 21.5% to 24.9%.
    In the worst month (May 2025) solar captured only **17%** of baseload.
 4. **The duck curve is deepening.** Average midday prices fell from 38.9 to 25.3 EUR/MWh,
@@ -76,7 +76,7 @@ sets the 2026 regulated energy terms beside the hourly prices as an illustration
 Spain keeps adding solar, and the day-ahead market shows it: midday prices sink while evening
 prices hold. I wanted to measure that with public data: how does the price move as renewables
 cover more of demand, when do zero and negative prices happen, and how far below the average
-price does solar actually sell?
+price does solar's output clear?
 
 ### Data
 
@@ -96,8 +96,10 @@ price does solar actually sell?
 - **Calibration to REData.** The real-time feed changed method in December 2025, which
   shifted solar and demand levels overnight. Each day's hourly series is scaled so its daily
   total matches the official REData figure; 738 of 739 days are calibrated.
-- **Capture rate.** Capture price = Σ(price × generation) / Σ(generation). Capture rate =
-  capture price / simple average (baseload) price.
+- **Capture rate.** Capture price = Σ(price × generation) / Σ(generation), and capture rate =
+  capture price / simple average (baseload) price. These are generation-weighted hourly
+  capture prices (an estimate): since the market moved to 15-minute periods, price and
+  output moves within an hour are averaged away.
 - **Blackout exclusion.** The afternoon of 28 Apr 2025 (the Iberian blackout,
   12 hours) is left out of every share calculation because measured demand
   collapsed. Its prices stay in, since they were set the day before.
@@ -239,9 +241,9 @@ Method notes:
   Hydro is reported net of pumped-storage consumption, so it is clipped at zero. The share
   can exceed 100% when Spain is exporting or pumping.
 - **Capture price** = Σ(price × generation) / Σ(generation). **Capture rate** = capture
-  price / simple average (baseload) price. Both are computed on hourly values. Since the
-  move to 15-minute prices they are an hourly proxy, because within-hour co-movement of
-  price and output is averaged away.
+  price / simple average (baseload) price. These are generation-weighted hourly capture
+  prices (an estimate). Since the move to 15-minute prices they are an hourly proxy, because
+  within-hour co-movement of price and output is averaged away.
 - **Iberian blackout, 28 Apr 2025 from 12:33.** That day's prices are kept, because they
   were set the day before. Its afternoon hours are excluded from renewables-share
   calculations, including the aggregate shares in the table above, because measured
