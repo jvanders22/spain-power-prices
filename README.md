@@ -148,3 +148,7 @@ Canary systems are excluded.
   demand monitoring.*
 - This project is not affiliated with OMIE or Red Eléctrica. The code is MIT-licensed (see
   [LICENSE](LICENSE)). The licence does not cover the third-party data.
+
+## Video explainer
+
+A 20-second animated explainer of the solar findings (Remotion, 1080×1080) lives in [`video/`](video/README.md). Numbers are exported from the processed data by `scripts/export_video_data.py`.
