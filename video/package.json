@@ -1,0 +1,22 @@
+{
+  "name": "spain-power-solar-explainer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "26.5s Remotion explainer of the Spain solar price findings",
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render SolarExplainer out/solar-explainer.mp4",
+    "stills": "remotion still SolarExplainer out/frame-start.png --frame=45 && remotion still SolarExplainer out/frame-middle.png --frame=300 && remotion still SolarExplainer out/frame-callouts.png --frame=500 && remotion still SolarExplainer out/frame-transition-early.png --frame=570 && remotion still SolarExplainer out/frame-transition.png --frame=578 && remotion still SolarExplainer out/frame-end.png --frame=720",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.534",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.534"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.31",
+    "typescript": "5.9.3"
+  }
+}
