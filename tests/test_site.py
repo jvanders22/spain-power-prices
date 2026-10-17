@@ -303,3 +303,12 @@ def test_page_charts_match_python_on_repo_data(tmp_path):
     cases = [(df["date"].min(), df["date"].max(), 0.0), ("2025-03-01", "2026-02-28", 10.0)]
     for (start, end, threshold), js in zip(cases, _node(NODE_CHARTS, tmp_path, cases), strict=True):
         _assert_charts_match_python(transform.filter_dates(df, start, end), threshold, js)
+
+
+def test_goatcounter_tag_only_when_configured():
+    from spain_power.site_config import goatcounter_tag
+
+    assert goatcounter_tag("") == ""
+    tag = goatcounter_tag("abc")
+    assert 'data-goatcounter="https://abc.goatcounter.com/count"' in tag
+    assert 'src="//gc.zgo.at/count.js"' in tag

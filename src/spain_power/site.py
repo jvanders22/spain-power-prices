@@ -18,6 +18,7 @@ import plotly.graph_objects as go
 from plotly.offline import get_plotlyjs
 
 from . import case_study, charts, forecast, tariff20td, transform
+from .site_config import goatcounter_tag
 
 STATIC = Path(__file__).parent / "static"
 REPO_URL = case_study.REPO_URL
@@ -252,6 +253,7 @@ def _page(
 REE generation, hourly.">
 <link rel="icon" href="data:,">
 <style>{CSS}</style>
+{goatcounter_tag()}
 </head>
 <body>
 <header><nav aria-label="Main">
